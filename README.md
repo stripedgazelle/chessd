@@ -5,6 +5,7 @@ In this initial version boards are open to anyone who has a URL.
 I'll maybe make enforcement of player identity an option in future.
 
 After starting "./chessd 8080" (or whichever port you like) navigate in a browser to http://localhost:8080
+
 Type name of player as letters only, no spaces (backspace will start again from scratch) to filter games by player name.
 Clicking on the name filter you typed takes you to a filtered list of players with settings for each.
 Clicking on the name filter there takes you to a filtered list of matches with links to create matches.
