@@ -6,7 +6,7 @@ I'll maybe make enforcement of player identity an option in future.
 
 After starting "./chessd 8080" (or whichever port you like) navigate in a browser to http://localhost:8080
 
-Type name of player as letters only, no spaces (backspace will start again from scratch) to filter games by player name.
+Type name of player as letters only, no spaces (backspace will start again from scratch) to filter matches in progress between different players by player name.
 Clicking on the name filter you typed takes you to a filtered list of players with settings for each.
 Clicking on the name filter there takes you to a filtered list of matches with links to create matches.
 Match can be started as classical, chess960, or dynamite (like chess960 but with no restriction on king placement and no castling allowed).
