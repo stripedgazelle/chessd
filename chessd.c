@@ -33,6 +33,8 @@ static int legit_move (char fromx, char fromy, char tox, char toy, char *pos);
 static char *log_path = "chessd.log";
 static FILE *log_out;
 
+static char cookie[1000];
+
 struct game {
     char name[MAX_NAME];
     char start_pos[66];
@@ -50,6 +52,7 @@ struct game {
     int seen;
     int fics;
     int fics_style;
+    char password[MAX_NAME];
     struct game *next;
 };
 static struct game *games = NULL;
@@ -2175,6 +2178,16 @@ fics_connect (void)
     return (sockfd);
 }
 
+static int
+has_cookie (char *my_cookie)
+{
+    if (current_game->password[0]) {
+        return (strcmp (my_cookie, current_game->password) == 0);
+    }
+
+    return (1);
+}
+
 #define PROMOTE 0
 #define CHAT 1
 #define FLIP 2
@@ -2190,7 +2203,8 @@ http_play (char *query)
     char y, x;
     char piece;
     int possible = 0;
-    int can_move = 1; //FIXME protect via identity
+    int can_move = 0;
+    char *create_cookie = NULL;
     struct player *ptm; //player to move
     int show = 1;
     int touch = 1;
@@ -2199,6 +2213,8 @@ http_play (char *query)
     char *vs;
     char *name;
     int can_fics;
+
+    can_move = has_cookie (cookie);
 
     strcpy (white_name, current_game->name);
     vs = strstr (white_name, VS);
@@ -2216,7 +2232,7 @@ http_play (char *query)
     }
 
     /********** chat query ***********/
-    if (query[0] == 'C' && (query[1] == 'F' || query[1] == 'X')) {
+    if (query[0] == 'C' && (query[1] == 'F' || query[1] == 'N' || query[1] == 'X')) {
         char flip = query[1];
         if (query[2] == '=') {
             chatquery (query + 3);
@@ -2229,6 +2245,7 @@ http_play (char *query)
             fprintf (http_out,
                      "<html>\n"
                      "  <head>\n"
+                     "    <meta name=\"robots\" content=\"noindex\">\n"
                      "    <title>chat %s</title>\n"
                      "  </head>\n"
                      "  <body bgcolor=\"black\" style=\"color:white\">\n",
@@ -2248,6 +2265,46 @@ http_play (char *query)
         }
     }
 
+    /********** protect or play query ***********/
+    if (query[0] == 'P' && (query[1] == 'F' || query[1] == 'N' || query[1] == 'X')) {
+        char flip = query[1];
+        if (query[2] == '=') {
+            create_cookie = query + 3;
+            if (!current_game->password[0]) {
+                strncpy (current_game->password, create_cookie, sizeof (current_game->password));
+                current_game->password[sizeof (current_game->password) - 1] = '\0';
+            }
+            can_move = has_cookie (create_cookie);
+            if (flip == 'F') {
+                query = "QXFP00";
+            } else {
+                query = "QXXP00";
+            }
+        } else {
+            fprintf (http_out,
+                     "<html>\n"
+                     "  <head>\n"
+                     "    <meta name=\"robots\" content=\"noindex\">\n"
+                     "    <title>protect %s</title>\n"
+                     "  </head>\n"
+                     "  <body bgcolor=\"black\" style=\"color:white\">\n",
+                     current_game->name);
+
+            http_game (current_game, -1, flip);
+
+            fprintf (http_out,
+                     "    <form id=\"form\" method=\"GET\">\n"
+                     "      <input type=\"text\" id=\"P%c\" name=\"P%c\" style=\"background-color:black; color:white; width:320px; font-size:xx-small;\" autofocus /><br/>\n"
+                     "      <input value=\"%s password\" type=\"submit\" />\n"
+                     "    </form>\n"
+                     "  </body>\n"
+                     "</html>\n",
+                     flip, flip,
+                     (current_game->password[0] ? "submit" : "set"));
+            return;
+        }
+    }
+
     if (query[0] == 'S') {
         /********** sequence query ***********/
         chat (query + 1);
@@ -2262,7 +2319,7 @@ http_play (char *query)
             return;
         }
         query = "QXXP00";
-    } else if (strlen (query) == 71) {
+    } else if (can_move && (strlen (query) == 71)) {
         /********** MODE queries ***********/
         char *notation = NULL;
         if (query[MODE] == 'S') {
@@ -2314,28 +2371,30 @@ http_play (char *query)
         }
     }
 
-    /********** CHAT queries ***********/
-    switch (query[CHAT]) {
-    default:
-        break;
-    case 'F':
-        if (can_fics) {
+    if (can_move) {
+        /********** CHAT queries ***********/
+        switch (query[CHAT]) {
+        default:
+            break;
+        case 'F':
+            if (can_fics) {
+                current_game->chatlen = 0;
+                fics_connect ();
+            }
+            break;
+        case 'B':
             current_game->chatlen = 0;
-            fics_connect ();
+            break;
         }
-        break;
-    case 'B':
-        current_game->chatlen = 0;
-        break;
-    }
 
-    /********** PROMOTE queries ***********/
-    if ((query[PROMOTE] == 'R')
-     || (query[PROMOTE] == 'B')
-     || (query[PROMOTE] == 'N')) {
-        prom = query[PROMOTE];
-    } else {
-        prom = 'Q';
+        /********** PROMOTE queries ***********/
+        if ((query[PROMOTE] == 'R')
+         || (query[PROMOTE] == 'B')
+         || (query[PROMOTE] == 'N')) {
+            prom = query[PROMOTE];
+        } else {
+            prom = 'Q';
+        }
     }
 
     /********** FLIP queries ***********/
@@ -2373,8 +2432,16 @@ http_play (char *query)
 
     /********** javascript ***********/
     fprintf (http_out,
+             "    <meta name=\"robots\" content=\"noindex\">\n"
              "    <title>play %s</title>\n"
-             "    <script>\n"
+             "    <script>\n",
+             current_game->name);
+    if (create_cookie) {
+        fprintf (http_out,
+                 "      document.cookie = \"%s; path=/%s\";\n",
+                 create_cookie, current_game->name);
+    }
+    fprintf (http_out,
              "      var timer = null;\n"
              "      var sequence = %d;\n"
              "      var keys = \"\";\n"
@@ -2526,7 +2593,6 @@ http_play (char *query)
              "  </head>\n"
              "  <body onload=\"timer = setTimeout('auto_reload()',1000);\" "
              "        bgcolor=\"black\" style=\"color:white\">\n",
-             current_game->name,
              current_game->sequence,
              (current_game->fics ? 0 : 5000), //delay
              ((flip == 'F') ? white_name : black_name), //left arrow
@@ -2547,7 +2613,12 @@ http_play (char *query)
 
     /************** top player links ***************/
     print_reversed_link (current_game);
-    if (can_move && !current_game->fics) {
+    if (!can_move) {
+        fprintf (http_out, "<a href=\"?P%c\">play</a>\n", flip);
+    } else if (!current_game->fics) {
+        if (!current_game->password[0]) {
+            fprintf (http_out, "<a href=\"?P%c\">protect</a>\n", flip);
+        }
         if ((current_game->sel[0] == '0' && current_game->sel[1] == '0')
                 && (!memcmp (current_game->pos, current_game->start_pos, 66))) {
             play_anchor (prom, 'X', flip, 'S', '0', '0',
@@ -2724,7 +2795,9 @@ http_play (char *query)
     /************** bottom player links ***************/
     play_anchor (prom, 'X', ((flip == 'F') ? 'N' : 'F'), 'X',
                  current_game->sel[0], current_game->sel[1], current_game->pos, "flip");
-    promotion_links (flip);
+    if (can_move) {
+        promotion_links (flip);
+    }
     if (current_game->transcriptlen) {
         fprintf (http_out,
                  "<a href=\"%s?T\" target=\"_blank\">transcribe</a>\n",
@@ -2835,6 +2908,7 @@ http_games (char *query)
     fprintf (http_out,
              "<html>\n"
              "  <head>\n"
+             "    <meta name=\"robots\" content=\"noindex\">\n"
              "    <title>games</title>\n"
              "    <script>\n"
              "      var timer = null;\n"
@@ -3190,6 +3264,7 @@ http_matches (char *path, char *query)
     fprintf (http_out,
              "<html>\n"
              "  <head>\n"
+             "    <meta name=\"robots\" content=\"noindex\">\n"
              "    <title>matches</title>\n"
              "    <script>\n"
              "      var timer = null;\n"
@@ -3461,6 +3536,7 @@ http_players (char *player_path, char *query)
     fprintf (http_out,
              "<html>\n"
              "  <head>\n"
+             "    <meta name=\"robots\" content=\"noindex\">\n"
              "    <title>players</title>\n"
              "    <script>\n"
              "      var timer = null;\n"
@@ -3632,6 +3708,7 @@ http_create (char *path, char *query)
     fprintf (http_out,
              "<html>\n"
              "  <head>\n"
+             "    <meta name=\"robots\" content=\"noindex\">\n"
              "    <title>create</title>\n"
              "  </head>\n"
              "  <body bgcolor=\"black\" style=\"color:white\">\n"
@@ -3702,6 +3779,28 @@ http_respond (char *path, char *query)
     return (0);
 }
 
+void
+http_extract_cookie (char *headers)
+{
+    char *p;
+
+    p = strstr (headers, "Cookie: ");
+    if (p) {
+        int i;
+        p += 8;
+        for (i = 0; i < sizeof (cookie); ++i) {
+            if (*p < ' ') {
+                cookie[i] = '\0';
+                break;
+            }
+            cookie[i] = *p;
+            ++p;
+        }
+        cookie[sizeof (cookie) - 1] = '\0';
+        fprintf (log_out, "%s: Cookie: %s\n", cnow (), cookie);
+    }
+}
+
 #define MAX_HTTP_BUFFER 10000
 static int
 http_client (int http_fd)
@@ -3718,6 +3817,8 @@ http_client (int http_fd)
     struct timespec req;
     int flags;
     int loop = 0;
+
+    cookie[0] = '\0';
 
     flags = fcntl (http_fd, F_GETFL, 0);
     flags |= O_NONBLOCK;
@@ -3787,6 +3888,7 @@ http_client (int http_fd)
                     break;
                 case '\n':
                     headers = p;
+                    http_extract_cookie (headers);
                     p = 0;
                     break;
             }
