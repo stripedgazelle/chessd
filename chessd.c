@@ -50,6 +50,7 @@ struct game {
     char transcript[MAX_TRANSCRIPT];
     int transcriptlen;
     int seen;
+    int can_fics;
     int fics;
     int fics_style;
     char password[MAX_NAME];
@@ -1735,7 +1736,7 @@ chatchar (int c)
         int width = 0;
         int maxwidth;
 
-        if (current_game->fics) {
+        if (current_game->can_fics) {
             maxwidth = 80;
         } else {
             maxwidth = 60;
@@ -2071,7 +2072,7 @@ http_game (struct game *g, int id, char flip)
     fprintf (http_out, "</table></td>\n");
     fprintf (http_out, "<td valign=\"top\" style=\"background-color: inherit\">\n");
     fprintf (http_out, "<pre id=\"chat\" style=\"background-color: inherit; width:%dpx; height:300px; white-space: pre-wrap; word-break: keep-all; font-size:xx-small;\">%.*s</pre>",
-             (g->fics ? 520 : 320),
+             (g->can_fics ? 520 : 320),
              g->chatlen, g->chat);
     fprintf (http_out, "</td></tr></table>\n");
 
@@ -2178,6 +2179,55 @@ fics_connect (void)
     return (sockfd);
 }
 
+static void
+http_captcha (char *path, char *query)
+{
+    int correct;
+    int i;
+
+    fprintf (http_out,
+             "<html>\n"
+             "  <head>\n"
+             "    <meta name=\"robots\" content=\"noindex\">\n"
+             "    <title>captcha</title>\n"
+             "    <script>\n"
+             "      function choose(choice)\n"
+             "      {\n"
+             "        document.cookie = choice + \"; path=%s\";\n"
+             "        window.location = '%s?%s';\n"
+             "      }\n"
+             "    </script>\n"
+             "  </head>\n"
+             "  <body bgcolor=\"black\" style=\"color:white\">\n"
+             "    First, to discourage robots, please choose the true statement from the following:\n",
+             path, path, query);
+
+    correct = rb () & 7;
+
+    for (i = 0; i < 8; ++i) {
+        int x, y, z;
+        int temp = rb ();
+
+        x = 3 & temp;
+        temp >>= 3;
+        y = temp & 7;
+        temp >>= 3;
+        z = x + y;
+        if (i != correct) {
+            temp = 7 & temp;
+            z += temp + 1;
+        }
+
+        fprintf (http_out,
+                 "    <br/><button onclick=\"choose('%c%c%c')\">%d+%d=%d</button>\n",
+                 'a'+x, 'a'+y, 'a'+z, x, y, z);
+    }
+
+    fprintf (http_out,
+             "  </body>\n"
+             "</html>\n");
+}
+
 static int
 has_cookie (char *my_cookie)
 {
@@ -2185,7 +2235,12 @@ has_cookie (char *my_cookie)
         return (strcmp (my_cookie, current_game->password) == 0);
     }
 
-    return (1);
+    if (strlen (my_cookie) == 3
+     && my_cookie[0] + my_cookie[1] == my_cookie[2] + 'a') {
+        return (1);
+    }
+
+    return (2);
 }
 
 #define PROMOTE 0
@@ -2195,7 +2250,7 @@ has_cookie (char *my_cookie)
 #define SELX 4
 #define SELY 5
 static void
-http_play (char *query)
+http_play (char *path, char *query)
 {
     char flip;
     char try[66];
@@ -2212,7 +2267,7 @@ http_play (char *query)
     char *black_name;
     char *vs;
     char *name;
-    int can_fics;
+    char *default_query = "QXXP00";
 
     can_move = has_cookie (cookie);
 
@@ -2221,26 +2276,27 @@ http_play (char *query)
     if (vs) {
         *vs = '\0';
         black_name = vs + VSLEN;
-        can_fics = 0;
+        current_game->can_fics = 0;
     } else {
         black_name = white_name;
-        can_fics = 1;
+        current_game->can_fics = 1;
     }
 
     if (!query) {
         query = "";
     }
+    if (query[0] && (query[1] == 'F' || query[1] == 'N' || query[1] == 'X')) {
+        flip = query[1];
+    }
+    if (flip == 'F') {
+        default_query = "QXFP00";
+    }
 
     /********** chat query ***********/
-    if (query[0] == 'C' && (query[1] == 'F' || query[1] == 'N' || query[1] == 'X')) {
-        char flip = query[1];
+    if (query[0] == 'C') {
         if (query[2] == '=') {
             chatquery (query + 3);
-            if (flip == 'F') {
-                query = "QXFP00";
-            } else {
-                query = "QXXP00";
-            }
+            query = default_query;
         } else {
             fprintf (http_out,
                      "<html>\n"
@@ -2266,20 +2322,19 @@ http_play (char *query)
     }
 
     /********** protect or play query ***********/
-    if (query[0] == 'P' && (query[1] == 'F' || query[1] == 'N' || query[1] == 'X')) {
-        char flip = query[1];
+    if (query[0] == 'P') {
         if (query[2] == '=') {
             create_cookie = query + 3;
             if (!current_game->password[0]) {
+                if (can_move == 2) {
+                    return (http_captcha (path, query));
+                }
                 strncpy (current_game->password, create_cookie, sizeof (current_game->password));
                 current_game->password[sizeof (current_game->password) - 1] = '\0';
+                tick ();
             }
             can_move = has_cookie (create_cookie);
-            if (flip == 'F') {
-                query = "QXFP00";
-            } else {
-                query = "QXXP00";
-            }
+            query = default_query;
         } else {
             fprintf (http_out,
                      "<html>\n"
@@ -2318,13 +2373,22 @@ http_play (char *query)
                      current_game->transcript);
             return;
         }
-        query = "QXXP00";
+        /********** unprotect query ***********/
+        if (can_move == 1 && query[0] == 'U') {
+            current_game->password[0] = '\0';
+            tick ();
+        }
+        query = default_query;
     } else if (can_move && (strlen (query) == 71)) {
         /********** MODE queries ***********/
         char *notation = NULL;
         if (query[MODE] == 'S') {
             /********** restart game ***********/
             struct game *rg;
+
+            if (can_move == 2) {
+                return (http_captcha (path, query));
+            }
 
             current_game->transcriptlen = 0;
             current_game->movenum = 0;
@@ -2349,11 +2413,12 @@ http_play (char *query)
             strcpy (current_game->pos, query + 6);
             strcpy (current_game->start_pos, current_game->pos);
             tick ();
-        }
-
-        if ((query[MODE] == 'M')
+        } else if ((query[MODE] == 'M')
          && strcmp (current_game->pos, query + 6)
          && (notation = one_move_diff (current_game->pos, query + 6))) {
+            if (can_move == 2) {
+                return (http_captcha (path, query));
+            }
             if (!current_game->movenum) {
                 transcribe_fen ();
             }
@@ -2371,23 +2436,31 @@ http_play (char *query)
         }
     }
 
+    /********** CHAT queries ***********/
     if (can_move) {
-        /********** CHAT queries ***********/
         switch (query[CHAT]) {
         default:
             break;
         case 'F':
-            if (can_fics) {
+            if (current_game->can_fics) {
+                if (can_move == 2) {
+                    return (http_captcha (path, query));
+                }
                 current_game->chatlen = 0;
                 fics_connect ();
             }
             break;
         case 'B':
+            if (can_move == 2) {
+                return (http_captcha (path, query));
+            }
             current_game->chatlen = 0;
             break;
         }
+    }
 
-        /********** PROMOTE queries ***********/
+    /********** PROMOTE queries ***********/
+    if (can_move) {
         if ((query[PROMOTE] == 'R')
          || (query[PROMOTE] == 'B')
          || (query[PROMOTE] == 'N')) {
@@ -2412,6 +2485,11 @@ http_play (char *query)
            && (query[SELX] >= 'a') && (query[SELX] <= 'h')
            && (query[SELY] >= '1') && (query[SELY] <= '8')))) {
         if (can_move) {
+            if (can_move == 2
+             && current_game->sel[0] != query[SELX]
+             && current_game->sel[1] != query[SELY]) {
+                return (http_captcha (path, query));
+            }
             current_game->sel[0] = query[SELX];
             current_game->sel[1] = query[SELY];
             tick ();
@@ -2438,8 +2516,8 @@ http_play (char *query)
              current_game->name);
     if (create_cookie) {
         fprintf (http_out,
-                 "      document.cookie = \"%s; path=/%s\";\n",
-                 create_cookie, current_game->name);
+                 "      document.cookie = \"%s; path=%s\";\n",
+                 create_cookie, path);
     }
     fprintf (http_out,
              "      var timer = null;\n"
@@ -2621,6 +2699,9 @@ http_play (char *query)
         }
         if ((current_game->sel[0] == '0' && current_game->sel[1] == '0')
                 && (!memcmp (current_game->pos, current_game->start_pos, 66))) {
+            if (can_move == 1 && current_game->password[0]) {
+                fprintf (http_out, "<a href=\"?U%c\">unprotect</a>\n", flip);
+            }
             play_anchor (prom, 'X', flip, 'S', '0', '0',
                          classical_pos (), "classical");
             play_anchor (prom, 'X', flip, 'S', '0', '0',
@@ -2636,7 +2717,7 @@ http_play (char *query)
                          current_game->sel[0], current_game->sel[1],
                          current_game->pos, "blank");
         }
-        if (can_fics) {
+        if (current_game->can_fics) {
             play_anchor (prom, 'F', flip, 'S', '0', '0',
                          current_game->start_pos, "fics");
         }
@@ -2738,7 +2819,7 @@ http_play (char *query)
     /************** chat ***************/
     fprintf (http_out, "<td valign=\"top\">\n");
     fprintf (http_out, "<pre id=\"chat\" style=\"width:%dpx; height:300px; white-space: pre-wrap; word-break: keep-all; font-size:xx-small;\">",
-             (can_fics ? 520 : 320));
+             (current_game->can_fics ? 520 : 320));
     if (current_game->fics) {
         int i;
         char c;
@@ -3163,6 +3244,7 @@ purge_old_games (void)
 
     while (this_game) {
         if (!strcmp (this_game->start_pos, this_game->pos)
+         && !this_game->password[0]
          && (now - this_game->update_t > 86400)
          && !only_game_for_player (this_game)) {
             struct game *temp = this_game;
@@ -3774,7 +3856,7 @@ http_respond (char *path, char *query)
     }
 
     fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
-    http_play (query);
+    http_play (path, query);
 
     return (0);
 }
