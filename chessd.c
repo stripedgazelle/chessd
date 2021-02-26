@@ -40,6 +40,8 @@ static FILE *log_out;
 static char cookie[1000];
 
 static char body_style[1000];
+static char style_normal[1000];
+static char style_highlit[1000];
 
 struct game {
     char name[MAX_NAME];
@@ -1468,6 +1470,39 @@ one_move_diff (char *start_pos, char *end_pos)
     return (NULL);
 }
 
+static char *
+get_background_color (void)
+{
+    if (current_pref) {
+        if (current_pref->background_color) {
+            return (current_pref->background_color);
+        }
+    }
+    return (DEFAULT_BACKGROUND_COLOR);
+}
+
+static char *
+get_color (void)
+{
+    if (current_pref) {
+        if (current_pref->color) {
+            return (current_pref->color);
+        }
+    }
+    return (DEFAULT_COLOR);
+}
+
+static float
+get_scale (void)
+{
+    if (current_pref) {
+        if (current_pref->scale) {
+            return (current_pref->scale);
+        }
+    }
+    return (DEFAULT_SCALE);
+}
+
 static void
 http_png (FILE *http_out, char *path)
 {
@@ -1552,9 +1587,9 @@ print_white_name (struct game *g, int link)
     char *fmt;
 
     if (g->pos[0] == 'W') {
-        fmt = "<span style=\"background-color:white; color:black\">%s</span>";
+        fmt = "<span style=\"background-color:%s; color:%s\">%s</span>";
     } else {
-        fmt = "<span style=\"color:white\">%s</span>";
+        fmt = "<span style=\"color:%s; background-color:%s\">%s</span>";
     }
 
     strcpy (wn, g->name);
@@ -1567,7 +1602,7 @@ print_white_name (struct game *g, int link)
         fprintf (http_out, "<a href=\"/?T%s\">", wn);
     }
 
-    fprintf (http_out, fmt, wn);
+    fprintf (http_out, fmt, get_color (), get_background_color (), wn);
 
     if (link) {
         fprintf (http_out, "</a>&nbsp;");
@@ -1586,9 +1621,9 @@ print_black_name (struct game *g, int link)
     char *fmt;
 
     if (g->pos[0] == 'B') {
-        fmt = "<span style=\"background-color:white; color:black\">%s</span>";
+        fmt = "<span style=\"background-color:%s; color:%s\">%s</span>";
     } else {
-        fmt = "<span style=\"color:white\">%s</span>";
+        fmt = "<span style=\"color:%s; background-color:%s\">%s</span>";
     }
 
     vs = strstr (g->name, VS);
@@ -1602,7 +1637,7 @@ print_black_name (struct game *g, int link)
         fprintf (http_out, "<a href=\"/?T%s\">", bn);
     }
 
-    fprintf (http_out, fmt, bn);
+    fprintf (http_out, fmt, get_color (), get_background_color (), bn);
 
     if (link) {
         fprintf (http_out, "</a>&nbsp;");
@@ -2399,31 +2434,27 @@ insure_current_pref (void)
 static void
 set_current_pref (void)
 {
-    char *background_color = DEFAULT_BACKGROUND_COLOR;
-    char *color = DEFAULT_COLOR;
-    float scale = DEFAULT_SCALE;
-
     for (current_pref = prefs; current_pref; current_pref = current_pref->next) {
         if (!strcmp (current_pref->ip, current_ip)) {
             break;
         }
     }
 
-    if (current_pref) {
-        if (current_pref->background_color) {
-            background_color = current_pref->background_color;
-        }
-        if (current_pref->color) {
-            color = current_pref->color;
-        }
-        if (current_pref->scale) {
-            scale = current_pref->scale;
-        }
-    }
-
     snprintf (body_style, sizeof (body_style),
               "style=\"background-color:%s; color:%s; transform-origin: 0 0; transform: scale(%.1f);\"",
-              background_color, color, scale);
+              get_background_color (),
+              get_color (),
+              get_scale ());
+
+    snprintf (style_normal, sizeof (style_normal),
+              "background-color:%s; color:%s",
+              get_background_color (),
+              get_color ());
+
+    snprintf (style_highlit, sizeof (style_highlit),
+              "color:%s; background-color:%s",
+              get_background_color (),
+              get_color ());
 }
 
 static void
@@ -3577,6 +3608,8 @@ http_matches (char *player_path, char *query)
              "      var y = %d;\n"
              "      var filter = '%s';\n"
              "      var append = '';\n"
+             "      var bgcol = '%s';\n"
+             "      var col = '%s';\n"
              "      function auto_reload () {\n"
              "        if (append.length) {\n"
              "          window.location = '?%c' + filter + append;\n"
@@ -3618,9 +3651,11 @@ http_matches (char *player_path, char *query)
              "            return;\n"
              "          case 38:\n" //up arrow
              "            if (y > 0) {\n"
-             "              document.getElementById(y).style.backgroundColor = 'black';\n"
+             "              document.getElementById(y).style.backgroundColor = bgcol;\n"
+             "              document.getElementById(y).style.color = col;\n"
              "              --y;\n"
-             "              document.getElementById(y).style.backgroundColor = 'white';\n"
+             "              document.getElementById(y).style.backgroundColor = col;\n"
+             "              document.getElementById(y).style.color = bgcol;\n"
              "            }\n"
              "            return;\n"
              "          case 39:\n" //right arrow
@@ -3628,9 +3663,11 @@ http_matches (char *player_path, char *query)
              "            return;\n"
              "          case 40:\n" //down arrow
              "            if (document.getElementById(y+1)) {\n"
-             "              document.getElementById(y).style.backgroundColor = 'black';\n"
+             "              document.getElementById(y).style.backgroundColor = bgcol;\n"
+             "              document.getElementById(y).style.color = col;\n"
              "              ++y;\n"
-             "              document.getElementById(y).style.backgroundColor = 'white';\n"
+             "              document.getElementById(y).style.backgroundColor = col;\n"
+             "              document.getElementById(y).style.color = bgcol;\n"
              "            }\n"
              "            return;\n"
              "          default:\n" //0-9 and A-Z
@@ -3650,12 +3687,12 @@ http_matches (char *player_path, char *query)
              "    </script>\n"
              "  </head>\n"
              "  <body %s>\n",
-             sely, filter, playing_as,
+             sely, filter, get_background_color (), get_color (), playing_as,
              playing_as, //backspace or delete
              new_name, ((playing_as == 'W') ? 'b' : 'c'), //left arrow
              new_name, ((playing_as == 'W') ? 'B' : 'W'), sely, filter, //tab
-             new_name,
-             body_style); //right arrow
+             new_name, //right arrow
+             body_style);
 
     if (new_name[0]) {
         if (playing_as != 'W') {
@@ -3723,9 +3760,10 @@ http_matches (char *player_path, char *query)
                  (playing_as == 'W' ? p1_name : p2->name),
                  (playing_as == 'W' ? p2->name : p1_name));
 
-        fprintf (http_out, "<a id=\"%d\" name=\"%d\" style=\"%s\"",
-                 y, y, (y == sely ? "background-color:white; color:indigo"
-                                  : "background-color:inherit; color:indigo"));
+        fprintf (http_out, "<a id=\"%d\" name=\"%d\" style=\"background-color:%s; color:%s\"",
+                 y, y,
+                 (y == sely ? get_color () : get_background_color ()),
+                 (y == sely ? get_background_color () : get_color ()));
 
         if (game_name[0]) {
             set_current_game (game_name);
@@ -3851,6 +3889,8 @@ http_players (char *player_path, char *query)
              "      var y = %d;\n"
              "      var filter = '%s';\n"
              "      var append = '';\n"
+             "      var bgcol = '%s';\n"
+             "      var col = '%s';\n"
              "      function auto_reload()\n"
              "      {\n"
              "        if (append.length) {\n"
@@ -3887,41 +3927,47 @@ http_players (char *player_path, char *query)
              "tab: show matches for filter');\n"
              "            break;\n"
              "          case 37:\n" //left arrow
-             "            if (x == 'a') {\n"
-             "              window.location = '/?N' + filter + append;\n"
-             "            } else {\n"
+             "            if (x > 'a') {\n"
              "              var e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = 'inherit';\n"
+             "              e.style.backgroundColor = bgcol;\n"
+             "              e.style.color = col;\n"
              "              x = String.fromCharCode(x.charCodeAt(0)-1);\n"
              "              e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = 'white';\n"
+             "              e.style.backgroundColor = col;\n"
+             "              e.style.color = bgcol;\n"
              "            }\n"
              "            break;\n"
              "          case 38:\n" //up arrow
              "            if (y > 0) {\n"
              "              var e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = 'inherit';\n"
+             "              e.style.backgroundColor = bgcol;\n"
+             "              e.style.color = col;\n"
              "              --y;\n"
              "              e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = 'white';\n"
+             "              e.style.backgroundColor = col;\n"
+             "              e.style.color = bgcol;\n"
              "            }\n"
              "            return;\n"
              "          case 39:\n" //right arrow
              "            if (x != 'f') {\n"
              "              var e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = 'inherit';\n"
+             "              e.style.backgroundColor = bgcol;\n"
+             "              e.style.color = col;\n"
              "              x = String.fromCharCode(x.charCodeAt(0)+1);\n"
              "              e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = 'white';\n"
+             "              e.style.backgroundColor = col;\n"
+             "              e.style.color = bgcol;\n"
              "            }\n"
              "            break;\n"
              "          case 40:\n" //down arrow
              "            if (document.getElementById('a'+(y+1))) {\n"
              "              var e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = 'inherit';\n"
+             "              e.style.backgroundColor = bgcol;\n"
+             "              e.style.color = col;\n"
              "              ++y;\n"
              "              e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = 'white';\n"
+             "              e.style.backgroundColor = col;\n"
+             "              e.style.color = bgcol;\n"
              "            }\n"
              "            break;\n"
              "          default:\n" //0-9 and A-Z
@@ -3949,20 +3995,20 @@ http_players (char *player_path, char *query)
              "      <th>touch</th>\n"
              "      <th>show</th>\n"
              "    </tr>\n",
-             selx, sely, filter,
+             selx, sely, filter, get_background_color (), get_color (),
              filter, //tab
              filter, filter,
              body_style);
 
     y = 0;
-    off = "background-color:inherit; color:indigo";
+    off = style_normal;
     for (p = players; p; p = p->next) {
         if (strncmp (filter, p->name, strlen (filter))) {
             continue;
         }
 
         if (y == sely) {
-            on = "background-color:white; color:indigo";
+            on = style_highlit;
         } else {
             on = off;
         }
