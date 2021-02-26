@@ -17,7 +17,7 @@
 #include <sys/random.h>
 #include <dirent.h>
 
-#define DEFAULT_BACKGROUND_COLOR "burlywood"
+#define DEFAULT_BACKGROUND_COLOR "tan"
 #define DEFAULT_COLOR "black"
 #define DEFAULT_SCALE 1.5
 #define MAX_PLAYERS 20
@@ -2365,7 +2365,7 @@ http_password (int flip, int protected)
 
     fprintf (http_out,
              "    <form id=\"form\" method=\"GET\">\n"
-             "      <input type=\"text\" id=\"P%c%c\" name=\"P%c%c\" value=\"%s\" style=\"background-color:black; color:white; width:320px; font-size:xx-small;\" autofocus /><br/>\n"
+             "      <input type=\"text\" id=\"P%c%c\" name=\"P%c%c\" value=\"%s\" style=\"width:320px; font-size:xx-small;\" autofocus /><br/>\n"
              "      <input value=\"%s password for %s\" type=\"submit\" />\n"
              "    </form>\n",
              flip, current_game->pos[0],
@@ -2921,6 +2921,8 @@ http_play (char *path, char *query)
         }
     }
 
+    fprintf (http_out, "<a href=\"/\">games</a>\n");
+
     if ((flip == 'F') ^ (current_game->pos[0] == 'B')) {
         print_play_link (can_move, flip);
     }
@@ -3083,7 +3085,7 @@ http_play (char *path, char *query)
     }
     if (current_game->transcriptlen) {
         fprintf (http_out,
-                 "<a href=\"%s?T\" target=\"_blank\">transcribe</a>\n",
+                 "<a href=\"%s?T\" target=\"_blank\">scribe</a>\n",
                  current_game->name);
     }
     fprintf (http_out, "<a href=\"?C%c\">type</a>\n", flip);
@@ -4050,6 +4052,31 @@ print_pref_float (char *name, float value, float default_value)
              name, name, name, (value ? value : default_value));
 }
 
+static char *
+dup_html_color (char *buf)
+{
+    int len;
+
+    while (*buf == '+') {
+        ++buf;
+    }
+
+    len = strlen (buf);
+    if (len >= 9 && !strncmp (buf, "%23", 3)) {
+        buf += 2;
+        *buf = '#';
+        *(buf + 7) = '\0';
+        return (strdup (buf));
+    } else if (len > 0 && len < 20) {
+        char *p;
+        for (p = buf; isalpha(*p); ++p);
+        *p = '\0';
+        return (strdup (buf));
+    }
+
+    return (NULL);
+}
+
 static int
 http_prefs (char *query)
 {
@@ -4057,7 +4084,6 @@ http_prefs (char *query)
 
     while (query && query[0]) {
         char *this;
-        int len;
 
         this = query;
         if ((query = strchr (query, '&'))) {
@@ -4068,33 +4094,23 @@ http_prefs (char *query)
         if (!strncmp (this, "background-color=", 17)) {
             if (current_pref->background_color) {
                 free (current_pref->background_color);
-                current_pref->background_color = NULL;
             }
-            this += 17;
-            len = strlen (this);
-            if (len > 0 && len < 20) {
-                current_pref->background_color = strdup (this);
-            }
-        }
-
-        if (!strncmp (this, "color=", 6)) {
+            current_pref->background_color = dup_html_color (this + 17);
+        } else if (!strncmp (this, "color=", 6)) {
             if (current_pref->color) {
                 free (current_pref->color);
-                current_pref->color = NULL;
             }
-            this += 6;
-            len = strlen (this);
-            if (len > 0 && len < 20) {
-                current_pref->color = strdup (this);
-            }
-        }
-
-        if (!strncmp (this, "scale=", 6)) {
+            current_pref->color = dup_html_color (this + 6);
+        } else if (!strncmp (this, "scale=", 6)) {
             float scale;
-            current_pref->scale = 0;
-            this += 6;
-            scale = atof (this);
-            if (scale >= 0.5 && scale <= 5.0) {
+            scale = atof (this + 6);
+            if (!scale) {
+                current_pref->scale = DEFAULT_SCALE;
+            } else if (scale < 0.5) {
+                current_pref->scale = 0.5;
+            } else if (scale > 5.0) {
+                current_pref->scale = 5.0;
+            } else {
                 current_pref->scale = scale;
             }
         }
@@ -4107,11 +4123,33 @@ http_prefs (char *query)
              "  <head>\n"
              "    <meta name=\"robots\" content=\"noindex\">\n"
              "    <title>prefs</title>\n"
+             "    <script>\n"
+             "      document.onkeydown = function(evt) {\n"
+             "        evt = evt || window.event;\n"
+             "        switch(evt.which) {\n"
+             "          case 27:\n" //escape
+             "            window.alert('"
+             "left arrow: make smaller\\n"
+             "right arrow: make bigger');\n"
+             "            break;\n"
+             "          case 37:\n" //left arrow
+             "            window.location = '?scale=%.1f';\n"
+             "            break;\n"
+             "          case 39:\n" //right arrow
+             "            window.location = '?scale=%.1f';\n"
+             "            return;\n"
+             "          default:\n"
+             "            break;\n"
+             "        }\n"
+             "      };\n"
+             "    </script>\n"
              "  </head>\n"
              "  <body %s>\n"
-             "    <a href=\"/\">home</a>\n"
+             "    <a href=\"/\">games</a>\n"
              "    <hr />\n"
              "    <form id=\"form\" method=\"GET\">\n",
+             (current_pref->scale ? current_pref->scale : DEFAULT_SCALE) - 0.1,
+             (current_pref->scale ? current_pref->scale : DEFAULT_SCALE) + 0.1,
              body_style);
 
     print_pref ("background-color",
@@ -4124,6 +4162,19 @@ http_prefs (char *query)
     fprintf (http_out,
              "      <input value=\"set preferences\" type=\"submit\" />\n"
              "    </form>\n"
+             "    Or you can use the left and right arrows to change scale<br/>\n"
+             "    and can use the palette below to choose colors:\n"
+             "    <table border>\n"
+             "      <tr>\n"
+             "        <td bgcolor=\"tan\"><a style=\"color:black\" href=\"?background-color=tan&color=black\"><big>A</big></a></td>\n"
+             "        <td bgcolor=\"black\"><a style=\"color:white\" href=\"?background-color=black&color=white\"><big>B</big></a></td>\n"
+             "      </tr>\n"
+             "    </table>\n"
+             "    For a result that will look like:\n"
+             "    <table cellspacing=\"0\" cellpadding=\"0\">\n"
+             "      <tr><td bgcolor=\"silver\"><img src=\"/images/bp.png\" /></td><td bgcolor=\"teal\"><img src=\"/images/bp.png\" /></td></tr>\n"
+             "      <tr><td bgcolor=\"teal\"><img src=\"/images/wp.png\" /></td><td bgcolor=\"silver\"><img src=\"/images/wp.png\" /></td></tr>\n"
+             "    </table>\n"
              "  </body>\n"
              "</html>\n");
 
