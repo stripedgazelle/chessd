@@ -2305,7 +2305,7 @@ good_cookie (char *my_cookie)
     return (2);
 }
 
-void
+static void
 print_play_link (int can_move, int flip)
 {
     if (can_move) {
@@ -2426,6 +2426,28 @@ set_current_pref (void)
               background_color, color, scale);
 }
 
+static void
+zoom (float change)
+{
+    float scale = DEFAULT_SCALE;
+
+    insure_current_pref ();
+    
+    if (current_pref->scale) {
+        scale = current_pref->scale;
+    }
+
+    scale += change;
+    if (scale < 0.5) {
+        scale = 0.5;
+    } else if (scale > 5.0) {
+        scale = 5.0;
+    }
+    current_pref->scale = scale;
+
+    set_current_pref ();
+}
+
 #define PROMOTE 0
 #define NETW 1
 #define FLIP 2
@@ -2477,22 +2499,14 @@ http_play (char *path, char *query)
 
     /********** zoom query ***********/
     if (query[0] == 'Z' && query[1]) {
-        float scale = DEFAULT_SCALE;
-
-        insure_current_pref ();
-        
-        if (current_pref->scale) {
-            scale = current_pref->scale;
+        switch (query[2]) {
+        case 'L':
+            zoom (-0.1);
+            break;
+        case 'R':
+            zoom (0.1);
+            break;
         }
-
-        if (query[2] == 'L' && scale >= 0.6) {
-            scale -= 0.1;
-        } else if (query[2] == 'R' && scale <= 4.9) {
-            scale += 0.1;
-        }
-        current_pref->scale = scale;
-
-        set_current_pref ();
     }
 
     /********** chat query ***********/
@@ -2727,7 +2741,11 @@ http_play (char *path, char *query)
              "            chat += ' ';\n"
              "            break;\n"
              "          case 37:\n" //left arrow
-             "            window.location = '?Z%cL';\n"
+             "            if (keys.length) {\n"
+             "              delay = 10;\n"
+             "            } else {\n"
+             "              window.location = '?Z%cL';\n"
+             "            }\n"
              "            break;\n"
              "          case 40:\n" //down arrow
              "            %s\n"
@@ -2736,7 +2754,11 @@ http_play (char *path, char *query)
              "            %s\n"
              "            break;\n"
              "          case 39:\n" //right arrow
-             "            window.location = '?Z%cR';\n"
+             "            if (keys.length) {\n"
+             "              delay = 10;\n"
+             "            } else {\n"
+             "              window.location = '?Z%cR';\n"
+             "            }\n"
              "            break;\n"
              "          case 48:\n" //close parenthesis
              "            chat += ')';\n"
@@ -3141,7 +3163,17 @@ http_games (char *query)
     char *filter = "";
     char omm = 'T';
 
-    if (!query || !query[0]) {
+    if (!query) {
+        query = "N";
+    } else if (query[0] == 'L') {
+        zoom (-0.1);
+        ++query;
+    } else if (query[0] == 'R') {
+        zoom (0.1);
+        ++query;
+    }
+
+    if (!query[0]) {
         query = "N";
     }
 
@@ -3194,21 +3226,24 @@ http_games (char *query)
              "            return;\n"
              "          case 27:\n" //escape
              "            window.alert('"
+             "left arrow: make smaller\\n"
+             "right arrow: make bigger\\n"
              "a-z: filter further\\n"
              "backspace or delete: clear filter\\n"
              "space: toggle showing boards to move versus all\\n"
              "?: show boards upon next update\\n"
              "up or down arrow: change focus to a different row\\n"
-             "enter or left arrow: play or kibitz game on left of focus row\\n"
-             "right arrow: play or kibitz game on right of focus row\\n"
+             "enter: play or kibitz game on left of focus row\\n"
              "tab: players list');\n"
              "            break;\n"
              "          case 32:\n" //space
              "            window.location = '?%c%s';\n"
              "            break;\n"
              "          case 13:\n" //enter
-             "          case 37:\n" //left arrow
              "            document.getElementById(y).click();\n"
+             "            break;\n"
+             "          case 37:\n" //left arrow
+             "            window.location = '?L%s';\n"
              "            break;\n"
              "          case 38:\n" //up arrow
              "            document.getElementById(y).style.backgroundColor = 'initial';\n"
@@ -3222,10 +3257,7 @@ http_games (char *query)
              "            evt.preventDefault();\n"
              "            break;\n"
              "          case 39:\n" //right arrow
-             "            if (document.getElementById(y+1)) {\n"
-             "              ++y;\n"
-             "            }\n"
-             "            document.getElementById(y).click();\n"
+             "            window.location = '?R%s';\n"
              "            return;\n"
              "          case 40:\n" //down arrow
              "            document.getElementById(y).style.backgroundColor = 'initial';\n"
@@ -3276,6 +3308,8 @@ http_games (char *query)
              god_sequence,
              filter, //tab
              (omm == 'T' ? 'F' : 'T'), filter, //space
+             query, //left arrow
+             query, //right arrow
              filter, //question mark
              filter,
              omm, threshold_t, filter,
@@ -4152,7 +4186,7 @@ http_respond (char *path, char *query)
     return (http_play (path, query));
 }
 
-void
+static void
 http_extract_cookie (char *headers)
 {
     char *p;
@@ -4287,7 +4321,7 @@ http_client (int http_fd)
     return (0);
 }
 
-void
+static void
 process_fics_line (char *input)
 {
     char pos[66];
