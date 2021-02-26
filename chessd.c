@@ -35,6 +35,8 @@ static FILE *log_out;
 
 static char cookie[1000];
 
+static char *bgcolor;
+
 struct game {
     char name[MAX_NAME];
     char start_pos[66];
@@ -53,7 +55,8 @@ struct game {
     int can_fics;
     int fics;
     int fics_style;
-    char password[MAX_NAME];
+    char white_password[MAX_NAME];
+    char black_password[MAX_NAME];
     struct game *next;
 };
 static struct game *games = NULL;
@@ -67,6 +70,13 @@ struct player {
 static struct player *players = NULL;
 static int players_count = 0;
 
+struct pref {
+    char ip[MAX_IP];
+    char *bgcolor;
+    struct pref *next;
+};
+static struct pref *prefs = NULL;
+
 static char prom = 'Q';
 
 static int god_sequence;
@@ -76,6 +86,8 @@ static int save_sequence;
 static char current_ip[MAX_IP];
 
 static struct game *current_game = NULL;
+
+static struct pref *current_pref = NULL;
 
 static int http_fd;
 static FILE *http_out;
@@ -172,7 +184,11 @@ save_game (struct game *g)
                  g->sel[0], g->sel[1], g->pos, g->sequence) < 0
      || fwrite (g->transcript, 1, g->transcriptlen, out) < g->transcriptlen
      || fwrite ("\0", 1, 1, out) < 1
-     || fwrite (g->chat, 1, g->chatlen, out) < g->chatlen) {
+     || fwrite (g->chat, 1, g->chatlen, out) < g->chatlen
+     || fwrite ("\0", 1, 1, out) < 1
+     || fprintf (out, "%s", g->white_password) < 0
+     || fwrite ("\0", 1, 1, out) < 1
+     || fprintf (out, "%s", g->black_password) < 0) {
         fprintf (log_out, "%s: failed to write %s\n", cnow (), tmppath);
         return (-1);
     }
@@ -311,6 +327,28 @@ load_game (char *name)
         }
         if (g->chatlen < MAX_CHAT) {
             g->chat[g->chatlen++] = c;
+        }
+    }
+
+    /* scan white password */
+    i = 0;
+    while ((c = fgetc (in))) {
+        if (c == EOF) {
+            goto load_game_close;
+        }
+        if (i < MAX_NAME - 1) {
+            g->white_password[i++] = c;
+        }
+    }
+
+    /* scan black password */
+    i = 0;
+    while ((c = fgetc (in))) {
+        if (c == EOF) {
+            goto load_game_close;
+        }
+        if (i < MAX_NAME - 1) {
+            g->black_password[i++] = c;
         }
     }
 
@@ -2179,7 +2217,7 @@ fics_connect (void)
     return (sockfd);
 }
 
-static void
+static int
 http_captcha (char *path, char *query)
 {
     int correct;
@@ -2198,9 +2236,9 @@ http_captcha (char *path, char *query)
              "      }\n"
              "    </script>\n"
              "  </head>\n"
-             "  <body bgcolor=\"black\" style=\"color:white\">\n"
+             "  <body bgcolor=\"%s\" style=\"color:white\">\n"
              "    First, to discourage robots, please choose the true statement from the following:\n",
-             path, path, query);
+             path, path, query, bgcolor);
 
     correct = rb () & 7;
 
@@ -2226,30 +2264,127 @@ http_captcha (char *path, char *query)
     fprintf (http_out,
              "  </body>\n"
              "</html>\n");
+
+    return (0);
 }
 
 static int
-has_cookie (char *my_cookie)
+good_cookie (char *my_cookie)
 {
-    if (current_game->password[0]) {
-        return (strcmp (my_cookie, current_game->password) == 0);
+    if (current_game) {
+        if (current_game->pos[0] == 'W') {
+            if (current_game->white_password[0]) {
+                return (strcmp (my_cookie, current_game->white_password) == 0);
+            }
+            if (current_game->black_password[0]
+             && (strcmp (my_cookie, current_game->black_password) == 0)) {
+                return (-1);
+            }
+        } else {
+            if (current_game->black_password[0]) {
+                return (strcmp (my_cookie, current_game->black_password) == 0);
+            }
+            if (current_game->white_password[0]
+             && (strcmp (my_cookie, current_game->white_password) == 0)) {
+                return (-1);
+            }
+        }
     }
 
     if (strlen (my_cookie) == 3
      && my_cookie[0] + my_cookie[1] == my_cookie[2] + 'a') {
-        return (1);
+        return (-1);
     }
 
     return (2);
 }
 
+void
+print_play_link (int can_move, int flip)
+{
+    if (can_move) {
+        char *password = (current_game->pos[0] == 'W')
+                       ? current_game->white_password
+                       : current_game->black_password;
+        if (password[0]) {
+            /* already playing */
+            return;
+        }
+    }
+
+    fprintf (http_out, "<a href=\"?P%c%c\">play</a>\n",
+             flip, current_game->pos[0]);
+}
+
+static int
+http_chat (int flip)
+{
+    fprintf (http_out,
+             "<html>\n"
+             "  <head>\n"
+             "    <meta name=\"robots\" content=\"noindex\">\n"
+             "    <title>chat %s</title>\n"
+             "  </head>\n"
+             "  <body bgcolor=\"%s\" style=\"color:white\">\n",
+             current_game->name, bgcolor);
+
+    http_game (current_game, -1, flip);
+
+    fprintf (http_out,
+             "    <form id=\"form\" method=\"GET\">\n"
+             "      <input type=\"text\" id=\"C%c\" name=\"C%c\" style=\"background-color:black; color:white; width:320px; font-size:xx-small;\" autofocus /><br/>\n"
+             "      <input value=\"submit chat\" type=\"submit\" />\n"
+             "    </form>\n"
+             "  </body>\n"
+             "</html>\n",
+             flip, flip);
+    return (0);
+}
+
+static int
+http_password (int flip, int protected)
+{
+    fprintf (http_out,
+             "<html>\n"
+             "  <head>\n"
+             "    <meta name=\"robots\" content=\"noindex\">\n"
+             "    <title>play %s</title>\n"
+             "  </head>\n"
+             "  <body bgcolor=\"%s\" style=\"color:white\">\n",
+             current_game->name, bgcolor);
+
+    if ((flip == 'F') ^ (current_game->pos[0] == 'W')) {
+        http_game (current_game, -1, flip);
+    }
+
+    fprintf (http_out,
+             "    <form id=\"form\" method=\"GET\">\n"
+             "      <input type=\"text\" id=\"P%c%c\" name=\"P%c%c\" style=\"background-color:black; color:white; width:320px; font-size:xx-small;\" autofocus /><br/>\n"
+             "      <input value=\"%s password for %s\" type=\"submit\" />\n"
+             "    </form>\n",
+             flip, current_game->pos[0],
+             flip, current_game->pos[0],
+             (protected ? "submit" : "set"),
+             (current_game->pos[0] == 'W' ? "white" : "black"));
+
+    if ((flip == 'F') ^ (current_game->pos[0] == 'B')) {
+        http_game (current_game, -1, flip);
+    }
+
+    fprintf (http_out,
+             "  </body>\n"
+             "</html>\n");
+
+    return (0);
+}
+
 #define PROMOTE 0
-#define CHAT 1
+#define NETW 1
 #define FLIP 2
 #define MODE 3
 #define SELX 4
 #define SELY 5
-static void
+static int
 http_play (char *path, char *query)
 {
     char flip;
@@ -2269,7 +2404,7 @@ http_play (char *path, char *query)
     char *name;
     char *default_query = "QXXP00";
 
-    can_move = has_cookie (cookie);
+    can_move = good_cookie (cookie);
 
     strcpy (white_name, current_game->name);
     vs = strstr (white_name, VS);
@@ -2293,70 +2428,34 @@ http_play (char *path, char *query)
     }
 
     /********** chat query ***********/
-    if (query[0] == 'C') {
+    if (query[0] == 'C' && query[1]) {
         if (query[2] == '=') {
             chatquery (query + 3);
             query = default_query;
         } else {
-            fprintf (http_out,
-                     "<html>\n"
-                     "  <head>\n"
-                     "    <meta name=\"robots\" content=\"noindex\">\n"
-                     "    <title>chat %s</title>\n"
-                     "  </head>\n"
-                     "  <body bgcolor=\"black\" style=\"color:white\">\n",
-                     current_game->name);
-
-            http_game (current_game, -1, flip);
-
-            fprintf (http_out,
-                     "    <form id=\"form\" method=\"GET\">\n"
-                     "      <input type=\"text\" id=\"C%c\" name=\"C%c\" style=\"background-color:black; color:white; width:320px; font-size:xx-small;\" autofocus /><br/>\n"
-                     "      <input value=\"submit chat\" type=\"submit\" />\n"
-                     "    </form>\n"
-                     "  </body>\n"
-                     "</html>\n",
-                     flip, flip);
-            return;
+            return (http_chat (flip));
         }
     }
 
-    /********** protect or play query ***********/
-    if (query[0] == 'P') {
-        if (query[2] == '=') {
-            create_cookie = query + 3;
-            if (!current_game->password[0]) {
+    /********** play query ***********/
+    if (query[0] == 'P' && query[1] && query[2]) {
+        char *password = (query[2] == 'W')
+                       ? current_game->white_password
+                       : current_game->black_password;
+        if (query[3] == '=') {
+            create_cookie = query + 4;
+            if (!password[0]) {
                 if (can_move == 2) {
                     return (http_captcha (path, query));
                 }
-                strncpy (current_game->password, create_cookie, sizeof (current_game->password));
-                current_game->password[sizeof (current_game->password) - 1] = '\0';
+                strncpy (password, create_cookie, MAX_NAME);
+                password[MAX_NAME - 1] = '\0';
                 tick ();
             }
-            can_move = has_cookie (create_cookie);
+            can_move = good_cookie (create_cookie);
             query = default_query;
         } else {
-            fprintf (http_out,
-                     "<html>\n"
-                     "  <head>\n"
-                     "    <meta name=\"robots\" content=\"noindex\">\n"
-                     "    <title>protect %s</title>\n"
-                     "  </head>\n"
-                     "  <body bgcolor=\"black\" style=\"color:white\">\n",
-                     current_game->name);
-
-            http_game (current_game, -1, flip);
-
-            fprintf (http_out,
-                     "    <form id=\"form\" method=\"GET\">\n"
-                     "      <input type=\"text\" id=\"P%c\" name=\"P%c\" style=\"background-color:black; color:white; width:320px; font-size:xx-small;\" autofocus /><br/>\n"
-                     "      <input value=\"%s password\" type=\"submit\" />\n"
-                     "    </form>\n"
-                     "  </body>\n"
-                     "</html>\n",
-                     flip, flip,
-                     (current_game->password[0] ? "submit" : "set"));
-            return;
+            return (http_password (flip, password[0]));
         }
     }
 
@@ -2364,19 +2463,14 @@ http_play (char *path, char *query)
         /********** sequence query ***********/
         chat (query + 1);
         fprintf (http_out, "%d", current_game->sequence);
-        return;
+        return (0);
     } else if (strlen (query) < 6) {
         /********** transcript query ***********/
         if (!strcmp (query, "T")) {
             fprintf (http_out, "<html><pre>%.*s</pre></html>",
                      current_game->transcriptlen,
                      current_game->transcript);
-            return;
-        }
-        /********** unprotect query ***********/
-        if (can_move == 1 && query[0] == 'U') {
-            current_game->password[0] = '\0';
-            tick ();
+            return (0);
         }
         query = default_query;
     } else if (can_move && (strlen (query) == 71)) {
@@ -2413,6 +2507,7 @@ http_play (char *path, char *query)
             strcpy (current_game->pos, query + 6);
             strcpy (current_game->start_pos, current_game->pos);
             tick ();
+            can_move = good_cookie (cookie);
         } else if ((query[MODE] == 'M')
          && strcmp (current_game->pos, query + 6)
          && (notation = one_move_diff (current_game->pos, query + 6))) {
@@ -2433,12 +2528,13 @@ http_play (char *path, char *query)
                 transcribe_move (notation);
             }
             tick ();
+            can_move = good_cookie (cookie);
         }
     }
 
-    /********** CHAT queries ***********/
+    /********** NETW queries ***********/
     if (can_move) {
-        switch (query[CHAT]) {
+        switch (query[NETW]) {
         default:
             break;
         case 'F':
@@ -2454,7 +2550,13 @@ http_play (char *path, char *query)
             if (can_move == 2) {
                 return (http_captcha (path, query));
             }
-            current_game->chatlen = 0;
+            if (current_game->chatlen) {
+                current_game->chatlen = 0;
+            } else if (!memcmp (current_game->pos, current_game->start_pos, 66)) {
+                current_game->white_password[0] = '\0';
+                current_game->black_password[0] = '\0';
+                can_move = -1;
+            }
             break;
         }
     }
@@ -2479,7 +2581,8 @@ http_play (char *path, char *query)
         show = ((ptm->show == 'Y') ? 1 : 0);
     }
 
-    if (!strcmp (current_game->pos, query + 6)
+    if ((query[MODE] != 'M')
+     && !strcmp (current_game->pos, query + 6)
      && (!touch ||
          ((current_game->sel[0] == '0' && current_game->sel[1] == '0')
            && (query[SELX] >= 'a') && (query[SELX] <= 'h')
@@ -2493,6 +2596,8 @@ http_play (char *path, char *query)
             current_game->sel[0] = query[SELX];
             current_game->sel[1] = query[SELY];
             tick ();
+        } else {
+            return (http_password (flip, 1));
         }
     }
 
@@ -2511,10 +2616,11 @@ http_play (char *path, char *query)
     /********** javascript ***********/
     fprintf (http_out,
              "    <meta name=\"robots\" content=\"noindex\">\n"
-             "    <title>play %s</title>\n"
+             "    <title>%s%s</title>\n"
              "    <script>\n",
+             (can_move ? ((can_move == 1) ? "play " : "kibitz ") : "await "),
              current_game->name);
-    if (create_cookie) {
+    if (create_cookie && create_cookie[0]) {
         fprintf (http_out,
                  "      document.cookie = \"%s; path=%s\";\n",
                  create_cookie, path);
@@ -2670,7 +2776,7 @@ http_play (char *path, char *query)
              "    </script>\n"
              "  </head>\n"
              "  <body onload=\"timer = setTimeout('auto_reload()',1000);\" "
-             "        bgcolor=\"black\" style=\"color:white\">\n",
+             "        bgcolor=\"%s\" style=\"color:white\">\n",
              current_game->sequence,
              (current_game->fics ? 0 : 5000), //delay
              ((flip == 'F') ? white_name : black_name), //left arrow
@@ -2680,7 +2786,8 @@ http_play (char *path, char *query)
                   : "document.getElementById('flip').click();"), //up arrow
              ((flip == 'F') ? black_name : white_name), //right arrow
              flip,
-             current_game->name, prom, 'X', flip, 'X', '0', '0');
+             current_game->name, prom, 'X', flip, 'X', '0', '0',
+             bgcolor);
 
     /************** top player ***************/
     if (flip == 'F') {
@@ -2691,16 +2798,17 @@ http_play (char *path, char *query)
 
     /************** top player links ***************/
     print_reversed_link (current_game);
-    if (!can_move) {
-        fprintf (http_out, "<a href=\"?P%c\">play</a>\n", flip);
-    } else if (!current_game->fics) {
-        if (!current_game->password[0]) {
-            fprintf (http_out, "<a href=\"?P%c\">protect</a>\n", flip);
-        }
+
+    if (can_move && !current_game->fics) {
+        /**** links available only at starting position ****/
         if ((current_game->sel[0] == '0' && current_game->sel[1] == '0')
                 && (!memcmp (current_game->pos, current_game->start_pos, 66))) {
-            if (can_move == 1 && current_game->password[0]) {
-                fprintf (http_out, "<a href=\"?U%c\">unprotect</a>\n", flip);
+            if (!current_game->chatlen
+             && (current_game->white_password[0]
+                 || current_game->black_password[0])) {
+                /*** if chat is blank as well, allow passwords to be reset ***/
+                play_anchor (prom, 'B', flip, 'X', '0', '0',
+                             current_game->pos, "reset");
             }
             play_anchor (prom, 'X', flip, 'S', '0', '0',
                          classical_pos (), "classical");
@@ -2721,6 +2829,10 @@ http_play (char *path, char *query)
             play_anchor (prom, 'F', flip, 'S', '0', '0',
                          current_game->start_pos, "fics");
         }
+    }
+
+    if ((flip == 'F') ^ (current_game->pos[0] == 'B')) {
+        print_play_link (can_move, flip);
     }
 
     /************** chess board ***************/
@@ -2886,8 +2998,14 @@ http_play (char *path, char *query)
     }
     fprintf (http_out, "<a href=\"?C%c\">type</a>\n", flip);
 
+    if ((flip == 'F') ^ (current_game->pos[0] == 'W')) {
+        print_play_link (can_move, flip);
+    }
+
     /************** that's all folks! ***************/
     fprintf (http_out, "</body></html>\n");
+
+    return (0);
 }
 
 /* 0 => no match, 1 => prefix to move, -1 => opponent of prefix to move */
@@ -3086,13 +3204,14 @@ http_games (char *query)
              "      }\n"
              "    </script>\n"
              "  </head>\n"
-             "  <body onload=\"timer = setTimeout('auto_reload()',1000);\" bgcolor=\"black\" style=\"color:white\">\n",
+             "  <body onload=\"timer = setTimeout('auto_reload()',1000);\" bgcolor=\"%s\" style=\"color:white\">\n",
              god_sequence,
              filter, //tab
              (omm == 'T' ? 'F' : 'T'), filter, //space
              filter, //question mark
              filter,
-             omm, threshold_t, filter);
+             omm, threshold_t, filter,
+             bgcolor);
 
     if (omm == 'T') {
         fprintf (http_out, "<a href=\"/?F%s\">showing</a> ", filter);
@@ -3244,7 +3363,6 @@ purge_old_games (void)
 
     while (this_game) {
         if (!strcmp (this_game->start_pos, this_game->pos)
-         && !this_game->password[0]
          && (now - this_game->update_t > 86400)
          && !only_game_for_player (this_game)) {
             struct game *temp = this_game;
@@ -3314,7 +3432,7 @@ create_game (char *name, int create_players)
 }
 
 static int
-http_matches (char *path, char *query)
+http_matches (char *player_path, char *query)
 {
     struct player *p = NULL;
     struct player *p2;
@@ -3338,8 +3456,8 @@ http_matches (char *path, char *query)
     }
 
     new_name[0] = '\0';
-    if (path[1]) {
-        sanitize_name (new_name, path + 1);
+    if (player_path[1]) {
+        sanitize_name (new_name, player_path + 1);
         p = get_player (new_name);
     }
 
@@ -3425,12 +3543,13 @@ http_matches (char *path, char *query)
              "      };\n"
              "    </script>\n"
              "  </head>\n"
-             "  <body bgcolor=\"black\" style=\"color:white\">\n",
+             "  <body bgcolor=\"%s\" style=\"color:white\">\n",
              sely, filter, playing_as,
              playing_as, //backspace or delete
              new_name, ((playing_as == 'W') ? 'b' : 'c'), //left arrow
              new_name, ((playing_as == 'W') ? 'B' : 'W'), sely, filter, //tab
-             new_name); //right arrow
+             new_name,
+             bgcolor); //right arrow
 
     if (new_name[0]) {
         if (playing_as != 'W') {
@@ -3716,7 +3835,7 @@ http_players (char *player_path, char *query)
              "    </script>\n"
              "  </head>\n"
              "  <a id=\"filter\" name=\"filter\" href=\"/matches/%s\">%s*</a>\n"
-             "  <body bgcolor=\"black\" style=\"color:white\">\n"
+             "  <body bgcolor=\"%s\" style=\"color:white\">\n"
              "    <table border>\n"
              "    <tr>\n"
              "      <th align=\"left\">name</th>\n"
@@ -3726,7 +3845,8 @@ http_players (char *player_path, char *query)
              "    </tr>\n",
              selx, sely, filter,
              filter, //tab
-             filter, filter);
+             filter, filter,
+             bgcolor);
 
     y = 0;
     off = "background-color:inherit; color:indigo";
@@ -3769,18 +3889,21 @@ http_players (char *player_path, char *query)
 }
 
 static int
-http_create (char *path, char *query)
+http_create (char *path, char *game_path, char *query)
 {
     struct game *g;
     char *msg = "nothing to do!";
 
-    if (path[1]) {
-        g = create_game (path + 1, 1);
+    if (game_path[1]) {
+        if (good_cookie (cookie) == 2) {
+            return (http_captcha (path, query));
+        }
+        g = create_game (game_path + 1, 1);
         if (g) {
             if (g->sequence) {
-                msg = "players already exist:";
+                msg = "match already exists:";
             } else {
-                msg = "players created:";
+                msg = "match created:";
             }
         } else {
             msg = "too many players! no room! no room!";
@@ -3793,9 +3916,9 @@ http_create (char *path, char *query)
              "    <meta name=\"robots\" content=\"noindex\">\n"
              "    <title>create</title>\n"
              "  </head>\n"
-             "  <body bgcolor=\"black\" style=\"color:white\">\n"
+             "  <body bgcolor=\"%s\" style=\"color:white\">\n"
              "    %s\n",
-             msg);
+             bgcolor, msg);
 
     if (g) {
         fprintf (http_out, "    <a href=\"/%s\">%s</a>\n", g->name, g->name);
@@ -3810,6 +3933,55 @@ http_create (char *path, char *query)
 }
 
 static int
+http_prefs (char *query)
+{
+    if (!current_pref) {
+        current_pref = calloc (1, sizeof (*current_pref));
+        strcpy (current_pref->ip, current_ip);
+        current_pref->next = prefs;
+        prefs = current_pref;
+    }
+
+    while (query && query[0]) {
+        char *this;
+
+        this = query;
+        if ((query = strchr (query, '&'))) {
+            *query = '\0';
+            ++query;
+        }
+
+        if (!strncmp (this, "bgcolor=", 8)) {
+            if (current_pref->bgcolor) {
+                free (current_pref->bgcolor);
+            }
+            current_pref->bgcolor = strdup (this + 8);
+        }
+    }
+
+    fprintf (http_out, "ip:%s\n", current_pref->ip);
+    fprintf (http_out, "bgcolor=%s\n",
+             (current_pref->bgcolor ? current_pref->bgcolor : ""));
+
+    return (0);
+}
+
+static void
+set_current_pref (void)
+{
+    bgcolor = "black";
+
+    for (current_pref = prefs; current_pref; current_pref = current_pref->next) {
+        if (!strcmp (current_pref->ip, current_ip)) {
+            if (current_pref->bgcolor) {
+                bgcolor = current_pref->bgcolor;
+            }
+            return;
+        }
+    }
+}
+
+static int
 http_respond (char *path, char *query)
 {
     char name[MAX_NAME];
@@ -3818,12 +3990,17 @@ http_respond (char *path, char *query)
              cnow (), current_ip, path, query);
     fflush (log_out);
 
+    set_current_pref ();
+
     if (!strncmp (path, "/images/", 8)) {
         http_png (http_out, path + 1);
         return (0);
     } else if (!strcmp (path, "/favicon.ico")) {
         http_png (http_out, path + 1);
         return (0);
+    } else if (!strcmp (path, "/prefs")) {
+        fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/plain\n\n");
+        return (http_prefs (query));
     } else if (!strncmp (path, "/players/", 9)) {
         fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
         return (http_players (path + 8, query));
@@ -3832,7 +4009,7 @@ http_respond (char *path, char *query)
         return (http_matches (path + 8, query));
     } else if (!strncmp (path, "/create/", 8)) {
         fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
-        return (http_create (path + 7, query));
+        return (http_create (path, path + 7, query));
     } else if (path[0] == '/') {
         strncpy (name, path + 1, sizeof (name));
         name[sizeof (name) - 1] = '\0';
@@ -3856,9 +4033,8 @@ http_respond (char *path, char *query)
     }
 
     fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
-    http_play (path, query);
 
-    return (0);
+    return (http_play (path, query));
 }
 
 void
