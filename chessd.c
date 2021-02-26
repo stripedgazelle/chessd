@@ -17,8 +17,12 @@
 #include <sys/random.h>
 #include <dirent.h>
 
+#define DEFAULT_BACKGROUND_COLOR "burlywood"
+#define DEFAULT_COLOR "black"
+#define DEFAULT_SCALE 1.5
 #define MAX_PLAYERS 20
 #define MAX_NAME 30
+
 #define MAX_PATH (100+MAX_NAME)
 #define MAX_CHAT 1500
 #define MAX_TRANSCRIPT 1000
@@ -35,7 +39,7 @@ static FILE *log_out;
 
 static char cookie[1000];
 
-static char *bgcolor;
+static char body_style[1000];
 
 struct game {
     char name[MAX_NAME];
@@ -72,7 +76,9 @@ static int players_count = 0;
 
 struct pref {
     char ip[MAX_IP];
-    char *bgcolor;
+    char *background_color;
+    char *color;
+    float scale;
     struct pref *next;
 };
 static struct pref *prefs = NULL;
@@ -2236,9 +2242,9 @@ http_captcha (char *path, char *query)
              "      }\n"
              "    </script>\n"
              "  </head>\n"
-             "  <body bgcolor=\"%s\" style=\"color:white\">\n"
+             "  <body %s>\n"
              "    First, to discourage robots, please choose the true statement from the following:\n",
-             path, path, query, bgcolor);
+             path, path, query, body_style);
 
     correct = rb () & 7;
 
@@ -2325,14 +2331,14 @@ http_chat (int flip)
              "    <meta name=\"robots\" content=\"noindex\">\n"
              "    <title>chat %s</title>\n"
              "  </head>\n"
-             "  <body bgcolor=\"%s\" style=\"color:white\">\n",
-             current_game->name, bgcolor);
+             "  <body %s>\n",
+             current_game->name, body_style);
 
     http_game (current_game, -1, flip);
 
     fprintf (http_out,
              "    <form id=\"form\" method=\"GET\">\n"
-             "      <input type=\"text\" id=\"C%c\" name=\"C%c\" style=\"background-color:black; color:white; width:320px; font-size:xx-small;\" autofocus /><br/>\n"
+             "      <input type=\"text\" id=\"C%c\" name=\"C%c\" style=\"width:320px; font-size:xx-small;\" autofocus /><br/>\n"
              "      <input value=\"submit chat\" type=\"submit\" />\n"
              "    </form>\n"
              "  </body>\n"
@@ -2350,8 +2356,8 @@ http_password (int flip, int protected)
              "    <meta name=\"robots\" content=\"noindex\">\n"
              "    <title>play %s</title>\n"
              "  </head>\n"
-             "  <body bgcolor=\"%s\" style=\"color:white\">\n",
-             current_game->name, bgcolor);
+             "  <body %s>\n",
+             current_game->name, body_style);
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'W')) {
         http_game (current_game, -1, flip);
@@ -2359,11 +2365,12 @@ http_password (int flip, int protected)
 
     fprintf (http_out,
              "    <form id=\"form\" method=\"GET\">\n"
-             "      <input type=\"text\" id=\"P%c%c\" name=\"P%c%c\" style=\"background-color:black; color:white; width:320px; font-size:xx-small;\" autofocus /><br/>\n"
+             "      <input type=\"text\" id=\"P%c%c\" name=\"P%c%c\" value=\"%s\" style=\"background-color:black; color:white; width:320px; font-size:xx-small;\" autofocus /><br/>\n"
              "      <input value=\"%s password for %s\" type=\"submit\" />\n"
              "    </form>\n",
              flip, current_game->pos[0],
              flip, current_game->pos[0],
+             (strlen (cookie) > 3 ? cookie : ""),
              (protected ? "submit" : "set"),
              (current_game->pos[0] == 'W' ? "white" : "black"));
 
@@ -2376,6 +2383,47 @@ http_password (int flip, int protected)
              "</html>\n");
 
     return (0);
+}
+
+static void
+insure_current_pref (void)
+{
+    if (!current_pref) {
+        current_pref = calloc (1, sizeof (*current_pref));
+        strcpy (current_pref->ip, current_ip);
+        current_pref->next = prefs;
+        prefs = current_pref;
+    }
+}
+
+static void
+set_current_pref (void)
+{
+    char *background_color = DEFAULT_BACKGROUND_COLOR;
+    char *color = DEFAULT_COLOR;
+    float scale = DEFAULT_SCALE;
+
+    for (current_pref = prefs; current_pref; current_pref = current_pref->next) {
+        if (!strcmp (current_pref->ip, current_ip)) {
+            break;
+        }
+    }
+
+    if (current_pref) {
+        if (current_pref->background_color) {
+            background_color = current_pref->background_color;
+        }
+        if (current_pref->color) {
+            color = current_pref->color;
+        }
+        if (current_pref->scale) {
+            scale = current_pref->scale;
+        }
+    }
+
+    snprintf (body_style, sizeof (body_style),
+              "style=\"background-color:%s; color:%s; transform-origin: 0 0; transform: scale(%.1f);\"",
+              background_color, color, scale);
 }
 
 #define PROMOTE 0
@@ -2425,6 +2473,26 @@ http_play (char *path, char *query)
     }
     if (flip == 'F') {
         default_query = "QXFP00";
+    }
+
+    /********** zoom query ***********/
+    if (query[0] == 'Z' && query[1]) {
+        float scale = DEFAULT_SCALE;
+
+        insure_current_pref ();
+        
+        if (current_pref->scale) {
+            scale = current_pref->scale;
+        }
+
+        if (query[2] == 'L' && scale >= 0.6) {
+            scale -= 0.1;
+        } else if (query[2] == 'R' && scale <= 4.9) {
+            scale += 0.1;
+        }
+        current_pref->scale = scale;
+
+        set_current_pref ();
     }
 
     /********** chat query ***********/
@@ -2583,14 +2651,14 @@ http_play (char *path, char *query)
 
     if ((query[MODE] != 'M')
      && !strcmp (current_game->pos, query + 6)
+     && current_game->sel[0] != query[SELX]
+     && current_game->sel[1] != query[SELY]
      && (!touch ||
          ((current_game->sel[0] == '0' && current_game->sel[1] == '0')
            && (query[SELX] >= 'a') && (query[SELX] <= 'h')
            && (query[SELY] >= '1') && (query[SELY] <= '8')))) {
         if (can_move) {
-            if (can_move == 2
-             && current_game->sel[0] != query[SELX]
-             && current_game->sel[1] != query[SELY]) {
+            if (can_move == 2) {
                 return (http_captcha (path, query));
             }
             current_game->sel[0] = query[SELX];
@@ -2650,8 +2718,8 @@ http_play (char *path, char *query)
              "            break;\n"
              "          case 27:\n" //escape
              "            window.alert('"
-             "left arrow: show games for player at top of board\\n"
-             "right arrow: show games for player at bottom of board\\n"
+             "left arrow: make smaller\\n"
+             "right arrow: make bigger\\n"
              "up arrow: orient board with white at top\\n"
              "down arrow: orient board with white at bottom\\n"
              "a-z,space,enter,backspace,etc: chat');\n"
@@ -2659,7 +2727,7 @@ http_play (char *path, char *query)
              "            chat += ' ';\n"
              "            break;\n"
              "          case 37:\n" //left arrow
-             "            window.location = '/?T%s';\n"
+             "            window.location = '?Z%cL';\n"
              "            break;\n"
              "          case 40:\n" //down arrow
              "            %s\n"
@@ -2668,7 +2736,7 @@ http_play (char *path, char *query)
              "            %s\n"
              "            break;\n"
              "          case 39:\n" //right arrow
-             "            window.location = '/?T%s';\n"
+             "            window.location = '?Z%cR';\n"
              "            break;\n"
              "          case 48:\n" //close parenthesis
              "            chat += ')';\n"
@@ -2776,18 +2844,18 @@ http_play (char *path, char *query)
              "    </script>\n"
              "  </head>\n"
              "  <body onload=\"timer = setTimeout('auto_reload()',1000);\" "
-             "        bgcolor=\"%s\" style=\"color:white\">\n",
+             "        %s>\n",
              current_game->sequence,
              (current_game->fics ? 0 : 5000), //delay
-             ((flip == 'F') ? white_name : black_name), //left arrow
+             flip, //left arrow
              ((flip == 'F') ? "document.getElementById('flip').click();"
                   : "/* do nothing */"), //down arrow
              ((flip == 'F') ? "/* do nothing */"
                   : "document.getElementById('flip').click();"), //up arrow
-             ((flip == 'F') ? black_name : white_name), //right arrow
+             flip, //right arrow
              flip,
              current_game->name, prom, 'X', flip, 'X', '0', '0',
-             bgcolor);
+             body_style);
 
     /************** top player ***************/
     if (flip == 'F') {
@@ -3204,14 +3272,14 @@ http_games (char *query)
              "      }\n"
              "    </script>\n"
              "  </head>\n"
-             "  <body onload=\"timer = setTimeout('auto_reload()',1000);\" bgcolor=\"%s\" style=\"color:white\">\n",
+             "  <body onload=\"timer = setTimeout('auto_reload()',1000);\" %s>\n",
              god_sequence,
              filter, //tab
              (omm == 'T' ? 'F' : 'T'), filter, //space
              filter, //question mark
              filter,
              omm, threshold_t, filter,
-             bgcolor);
+             body_style);
 
     if (omm == 'T') {
         fprintf (http_out, "<a href=\"/?F%s\">showing</a> ", filter);
@@ -3232,7 +3300,8 @@ http_games (char *query)
         fprintf (http_out, " on next update");
     }
 
-    fprintf (http_out, "<hr/>\n");
+    fprintf (http_out,
+             "&nbsp;|&nbsp;<a href=\"/prefs\">preferences</a><hr/>\n");
 
     for (this_game = games; this_game; this_game = this_game->next)
     {
@@ -3364,6 +3433,7 @@ purge_old_games (void)
     while (this_game) {
         if (!strcmp (this_game->start_pos, this_game->pos)
          && (now - this_game->update_t > 86400)
+         && !this_game->chatlen
          && !only_game_for_player (this_game)) {
             struct game *temp = this_game;
             char path[MAX_PATH];
@@ -3543,13 +3613,13 @@ http_matches (char *player_path, char *query)
              "      };\n"
              "    </script>\n"
              "  </head>\n"
-             "  <body bgcolor=\"%s\" style=\"color:white\">\n",
+             "  <body %s>\n",
              sely, filter, playing_as,
              playing_as, //backspace or delete
              new_name, ((playing_as == 'W') ? 'b' : 'c'), //left arrow
              new_name, ((playing_as == 'W') ? 'B' : 'W'), sely, filter, //tab
              new_name,
-             bgcolor); //right arrow
+             body_style); //right arrow
 
     if (new_name[0]) {
         if (playing_as != 'W') {
@@ -3835,7 +3905,7 @@ http_players (char *player_path, char *query)
              "    </script>\n"
              "  </head>\n"
              "  <a id=\"filter\" name=\"filter\" href=\"/matches/%s\">%s*</a>\n"
-             "  <body bgcolor=\"%s\" style=\"color:white\">\n"
+             "  <body %s>\n"
              "    <table border>\n"
              "    <tr>\n"
              "      <th align=\"left\">name</th>\n"
@@ -3846,7 +3916,7 @@ http_players (char *player_path, char *query)
              selx, sely, filter,
              filter, //tab
              filter, filter,
-             bgcolor);
+             body_style);
 
     y = 0;
     off = "background-color:inherit; color:indigo";
@@ -3916,9 +3986,9 @@ http_create (char *path, char *game_path, char *query)
              "    <meta name=\"robots\" content=\"noindex\">\n"
              "    <title>create</title>\n"
              "  </head>\n"
-             "  <body bgcolor=\"%s\" style=\"color:white\">\n"
+             "  <body %s>\n"
              "    %s\n",
-             bgcolor, msg);
+             body_style, msg);
 
     if (g) {
         fprintf (http_out, "    <a href=\"/%s\">%s</a>\n", g->name, g->name);
@@ -3932,18 +4002,28 @@ http_create (char *path, char *game_path, char *query)
     return (0);
 }
 
+static void
+print_pref (char *name, char *value, char *default_value)
+{
+    fprintf (http_out, "%s=<input type=\"text\" id=\"%s\" name=\"%s\" value=\"%s\" /><br/>\n",
+             name, name, name, (value ? value : default_value));
+}
+
+static void
+print_pref_float (char *name, float value, float default_value)
+{
+    fprintf (http_out, "%s=<input type=\"text\" id=\"%s\" name=\"%s\" value=\"%.1f\" /><br/>\n",
+             name, name, name, (value ? value : default_value));
+}
+
 static int
 http_prefs (char *query)
 {
-    if (!current_pref) {
-        current_pref = calloc (1, sizeof (*current_pref));
-        strcpy (current_pref->ip, current_ip);
-        current_pref->next = prefs;
-        prefs = current_pref;
-    }
+    insure_current_pref ();
 
     while (query && query[0]) {
         char *this;
+        int len;
 
         this = query;
         if ((query = strchr (query, '&'))) {
@@ -3951,34 +4031,69 @@ http_prefs (char *query)
             ++query;
         }
 
-        if (!strncmp (this, "bgcolor=", 8)) {
-            if (current_pref->bgcolor) {
-                free (current_pref->bgcolor);
+        if (!strncmp (this, "background-color=", 17)) {
+            if (current_pref->background_color) {
+                free (current_pref->background_color);
+                current_pref->background_color = NULL;
             }
-            current_pref->bgcolor = strdup (this + 8);
+            this += 17;
+            len = strlen (this);
+            if (len > 0 && len < 20) {
+                current_pref->background_color = strdup (this);
+            }
+        }
+
+        if (!strncmp (this, "color=", 6)) {
+            if (current_pref->color) {
+                free (current_pref->color);
+                current_pref->color = NULL;
+            }
+            this += 6;
+            len = strlen (this);
+            if (len > 0 && len < 20) {
+                current_pref->color = strdup (this);
+            }
+        }
+
+        if (!strncmp (this, "scale=", 6)) {
+            float scale;
+            current_pref->scale = 0;
+            this += 6;
+            scale = atof (this);
+            if (scale >= 0.5 && scale <= 5.0) {
+                current_pref->scale = scale;
+            }
         }
     }
 
-    fprintf (http_out, "ip:%s\n", current_pref->ip);
-    fprintf (http_out, "bgcolor=%s\n",
-             (current_pref->bgcolor ? current_pref->bgcolor : ""));
+    set_current_pref ();
+
+    fprintf (http_out,
+             "<html>\n"
+             "  <head>\n"
+             "    <meta name=\"robots\" content=\"noindex\">\n"
+             "    <title>prefs</title>\n"
+             "  </head>\n"
+             "  <body %s>\n"
+             "    <a href=\"/\">home</a>\n"
+             "    <hr />\n"
+             "    <form id=\"form\" method=\"GET\">\n",
+             body_style);
+
+    print_pref ("background-color",
+                current_pref->background_color, DEFAULT_BACKGROUND_COLOR);
+    print_pref ("color",
+                current_pref->color, DEFAULT_COLOR);
+    print_pref_float ("scale",
+                current_pref->scale, DEFAULT_SCALE);
+
+    fprintf (http_out,
+             "      <input value=\"set preferences\" type=\"submit\" />\n"
+             "    </form>\n"
+             "  </body>\n"
+             "</html>\n");
 
     return (0);
-}
-
-static void
-set_current_pref (void)
-{
-    bgcolor = "black";
-
-    for (current_pref = prefs; current_pref; current_pref = current_pref->next) {
-        if (!strcmp (current_pref->ip, current_ip)) {
-            if (current_pref->bgcolor) {
-                bgcolor = current_pref->bgcolor;
-            }
-            return;
-        }
-    }
 }
 
 static int
@@ -3999,7 +4114,7 @@ http_respond (char *path, char *query)
         http_png (http_out, path + 1);
         return (0);
     } else if (!strcmp (path, "/prefs")) {
-        fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/plain\n\n");
+        fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
         return (http_prefs (query));
     } else if (!strncmp (path, "/players/", 9)) {
         fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
