@@ -2739,7 +2739,7 @@ http_play (char *path, char *query)
         }
     }
 
-    /********** play query ***********/
+    /********** lock query ***********/
     if (query[0] == 'P' && query[1] && query[2]) {
         char *password = (query[2] == 'W')
                        ? current_game->white_password
@@ -2752,6 +2752,8 @@ http_play (char *path, char *query)
         if (create_cookie && create_cookie[0]) {
             if (!password[0]) {
                 if (can_move == 2) {
+                    /* Robots might even have a password set in preferences,
+                     * hence we had better still do the captcha here. */
                     return (http_captcha (path, query));
                 }
                 strncpy (password, create_cookie, MAX_NAME);
@@ -2957,6 +2959,7 @@ http_play (char *path, char *query)
              "a-z,space,enter,backspace,etc: chat');\n"
              "          case 32:\n" //space
              "            chat += ' ';\n"
+             "            evt.preventDefault();\n"
              "            break;\n"
              "          case 37:\n" //left arrow
              "            if (keys.length) {\n"
@@ -2972,6 +2975,7 @@ http_play (char *path, char *query)
              "            %s\n"
              "            break;\n"
              "          case 39:\n" //right arrow
+             "            evt.preventDefault();\n"
              "            if (keys.length) {\n"
              "              delay = 10;\n"
              "            } else {\n"
@@ -3028,6 +3032,7 @@ http_play (char *path, char *query)
              "            break;\n"
              "          case 222:\n" //apostrophe
              "            chat += '\\'';\n"
+             "            evt.preventDefault();\n"
              "            break;\n"
              "          default:\n" //0-9 and A-Z
              "            if ((evt.which >= 96) && (evt.which <= 105)) {\n"
@@ -3318,7 +3323,11 @@ http_play (char *path, char *query)
     return (0);
 }
 
-/* 0 => no match, 1 => prefix to move, -1 => opponent of prefix to move */
+/* 0 => no match,
+ * 1 => prefix to move as white, -1 => opponent of prefix to move as black
+ * 2 => prefix to move as black, -2 => opponent of prefix to move as white
+ * hence 1 or -1 if prefix has white pieces, 2 or -2 if prefix has black
+ */
 static int
 filter_match (char *prefix, struct game *g)
 {
@@ -3340,7 +3349,7 @@ filter_match (char *prefix, struct game *g)
 
     if (vs && !strncasecmp (prefix, vs + VSLEN, strlen (prefix))) {
         /* prefix has black pieces */
-        return ((g->pos[0] == 'B') ? 1 : -1);
+        return ((g->pos[0] == 'B') ? 2 : -2);
     }
 
     return (0);
@@ -3470,7 +3479,7 @@ http_games (char *query)
              "            if (first) {\n"
              "              first = 0;\n"
              "            } else if (y > 0) {\n"
-             "              y -= 2;\n"
+             "              y -= 1;\n"
              "            }\n"
              "            window.location = '#'+y;\n"
              "            document.getElementById(y).style.backgroundColor = 'indigo';\n"
@@ -3478,13 +3487,14 @@ http_games (char *query)
              "            break;\n"
              "          case 39:\n" //right arrow
              "            window.location = '?R%s';\n"
+             "            evt.preventDefault();\n"
              "            return;\n"
              "          case 40:\n" //down arrow
              "            document.getElementById(y).style.backgroundColor = 'initial';\n"
              "            if (first) {\n"
              "              first = 0;\n"
-             "            } else if (document.getElementById(y + 2)) {\n"
-             "              y += 2;\n"
+             "            } else if (document.getElementById(y + 1)) {\n"
+             "              y += 1;\n"
              "            }\n"
              "            window.location = '#'+y;\n"
              "            document.getElementById(y).style.backgroundColor = 'indigo';\n"
@@ -3500,7 +3510,7 @@ http_games (char *query)
              "            if (evt.which > 57 && evt.which < 65) {\n"
              "              return;\n"
              "            }\n"
-             "            window.location = '?T%s' + String.fromCharCode(evt.which).toLowerCase();\n"
+             "            window.location = '?%c%ld%s' + String.fromCharCode(evt.which).toLowerCase();\n"
              "            break;\n"
              "        }\n"
              "      };\n"
@@ -3531,7 +3541,7 @@ http_games (char *query)
              query, //left arrow
              query, //right arrow
              filter, //question mark
-             filter,
+             omm, threshold_t, filter,
              omm, threshold_t, filter,
              body_style);
 
@@ -3576,23 +3586,39 @@ http_games (char *query)
 
         fm = filter_match (filter, this_game);
         if (fm) {
-            struct game *rg;
-            rg = get_game (reversed_name (this_game));
+            struct game *wg = NULL;
+            struct game *bg = NULL;
+            struct game *rg = NULL;
 
-            if (rg) {
-                fprintf (http_out, "%s", "<table><tr><td width=\"650px\">\n");
-            }
-            shown += maybe_expand_game (y, omm, fm, threshold_t, this_game);
-            if (rg) {
-                fm = filter_match (filter, rg);
-                fprintf (http_out, "</td><td>\n");
-                shown += maybe_expand_game (y + 1, omm, fm, threshold_t, rg);
+            if ((rg = get_game (reversed_name (this_game)))) {
                 rg->seen = 1;
-                fprintf (http_out, "</td></tr></table>\n");
             }
+
+            if (abs (fm) == 1) {
+                /* filtered player has white pieces */
+                wg = this_game;
+                bg = rg;
+            } else {
+                /* filtered player has black pieces */
+                wg = rg;
+                bg = this_game;
+                fm = -fm;
+            }
+
+            fprintf (http_out, "%s", "<table><tr><td width=\"650px\">\n");
+            if (wg) {
+                shown += maybe_expand_game (y, omm, fm, threshold_t, wg);
+            }
+            fprintf (http_out, "</td><td>\n");
+            if (bg) {
+                fm = -fm;
+                shown += maybe_expand_game ((wg ? -y : y),
+                                            omm, fm, threshold_t, bg);
+            }
+            fprintf (http_out, "</td></tr></table>\n");
             fprintf (http_out, "<hr/>\n");
 
-            y += 2;
+            y += 1;
         }
     }
     fprintf (http_out, "<p style=\"padding-bottom:4in\"></body></html>\n");
@@ -4106,6 +4132,7 @@ http_prefs (char *query)
              "            window.location = '?scale=%.1f';\n"
              "            break;\n"
              "          case 39:\n" //right arrow
+             "            evt.preventDefault();\n"
              "            window.location = '?scale=%.1f';\n"
              "            return;\n"
              "          default:\n"
