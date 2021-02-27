@@ -79,6 +79,7 @@ struct pref {
     char *background_color;
     char *color;
     float scale;
+    char *password;
     struct pref *next;
 };
 static struct pref *prefs = NULL;
@@ -244,11 +245,12 @@ save_prefs (void)
         if (!p->background_color && !p->color && !p->scale) {
             continue;
         }
-        if (fprintf (out, "%s?background-color=%s&color=%s&scale=%.1f\n",
+        if (fprintf (out, "%s?background-color=%s&color=%s&scale=%.1f&password=%s\n",
                      p->ip,
                      (p->background_color ? p->background_color : ""),
                      (p->color ? p->color : ""),
-                     p->scale) < 0) {
+                     p->scale,
+                     (p->password ? p->password : "")) < 0) {
             fprintf (log_out, "%s: failed to write %s\n", cnow (), tmppath);
             return (-1);
         }
@@ -493,6 +495,15 @@ parse_prefs (char *query, struct pref *p)
                 p->scale = 5.0;
             } else {
                 p->scale = scale;
+            }
+        } else if (!strncmp (this, "password=", 9)) {
+            if (p->password) {
+                free (p->password);
+                p->password = NULL;
+            }
+            this += 9;
+            if (*this) {
+                p->password = strdup (this);
             }
         }
     }
@@ -1682,6 +1693,16 @@ get_scale (void)
     return (DEFAULT_SCALE);
 }
 
+static char *
+get_password (void)
+{
+    if (current_pref && current_pref->password) {
+        return (current_pref->password);
+    }
+
+    return ("");
+}
+
 static void
 http_png (FILE *http_out, char *path)
 {
@@ -2471,7 +2492,12 @@ good_cookie (char *my_cookie)
     if (current_game) {
         if (current_game->pos[0] == 'W') {
             if (current_game->white_password[0]) {
-                return (strcmp (my_cookie, current_game->white_password) == 0);
+                if (strcmp (my_cookie, current_game->white_password) == 0) {
+                    return (1);
+                } else {
+                    return (strcmp (get_password (),
+                                    current_game->white_password) == 0);
+                }
             }
             if (current_game->black_password[0]
              && (strcmp (my_cookie, current_game->black_password) == 0)) {
@@ -2479,7 +2505,12 @@ good_cookie (char *my_cookie)
             }
         } else {
             if (current_game->black_password[0]) {
-                return (strcmp (my_cookie, current_game->black_password) == 0);
+                if (strcmp (my_cookie, current_game->black_password) == 0) {
+                    return (1);
+                } else {
+                    return (strcmp (get_password (),
+                                    current_game->black_password) == 0);
+                }
             }
             if (current_game->white_password[0]
              && (strcmp (my_cookie, current_game->white_password) == 0)) {
@@ -2499,18 +2530,22 @@ good_cookie (char *my_cookie)
 static void
 print_play_link (int can_move, int flip)
 {
+    char *text;
     if (can_move) {
         char *password = (current_game->pos[0] == 'W')
                        ? current_game->white_password
                        : current_game->black_password;
         if (password[0]) {
-            /* already playing */
+            fprintf (http_out, "playing\n");
             return;
         }
+        text = "lock";
+    } else {
+        text = "unlock";
     }
 
-    fprintf (http_out, "<a href=\"?P%c%c\">play</a>\n",
-             flip, current_game->pos[0]);
+    fprintf (http_out, "<a href=\"?P%c%c\">%s</a>\n",
+             flip, current_game->pos[0], text);
 }
 
 static int
@@ -2711,6 +2746,10 @@ http_play (char *path, char *query)
                        : current_game->black_password;
         if (query[3] == '=') {
             create_cookie = query + 4;
+        } else {
+            create_cookie = get_password ();
+        }
+        if (create_cookie && create_cookie[0]) {
             if (!password[0]) {
                 if (can_move == 2) {
                     return (http_captcha (path, query));
@@ -4089,6 +4128,8 @@ http_prefs (char *query)
                 current_pref->color, DEFAULT_COLOR);
     print_pref_float ("scale",
                 current_pref->scale, DEFAULT_SCALE);
+    print_pref ("password",
+                current_pref->password, "");
 
     fprintf (http_out,
              "      <input value=\"set preferences\" type=\"submit\" />\n"
