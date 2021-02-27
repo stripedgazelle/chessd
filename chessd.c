@@ -50,6 +50,7 @@ struct game {
     char pos[66];
     char unused[2];
     int sequence;
+    int saved_sequence;
     time_t update_t;
     char chat[MAX_CHAT];
     int chatlen;
@@ -128,7 +129,7 @@ static void
 tick_game (struct game *g)
 {
     g->sequence++;
-    if (!g->fics) {
+    if (!g->can_fics) {
         god_sequence++;
     }
     g->update_t = time (NULL);
@@ -214,10 +215,14 @@ save_games (void)
     int rc = 0;
 
     for (g = games; g; g = g->next) {
-        if (save_game (g)) {
+        if (g->saved_sequence == g->sequence) {
+            //fprintf (log_out, "%s: save_games %s has not changed\n",
+            //         cnow (), g->name);
+        } else if (save_game (g)) {
             rc = 1;
         } else {
-            fprintf (log_out, "%s: save_games %s\n",
+            g->saved_sequence = g->sequence;
+            fprintf (log_out, "%s: save_games %s succeeded\n",
                      cnow (), g->name);
         }
     }
@@ -3466,6 +3471,7 @@ http_games (char *query)
              "tab: players list');\n"
              "            break;\n"
              "          case 32:\n" //space
+             "            evt.preventDefault();\n"
              "            window.location = '?%c%s';\n"
              "            break;\n"
              "          case 13:\n" //enter
@@ -4251,7 +4257,7 @@ http_extract_cookie (char *headers)
             ++p;
         }
         cookie[sizeof (cookie) - 1] = '\0';
-        fprintf (log_out, "%s: Cookie: %s\n", cnow (), cookie);
+        //fprintf (log_out, "%s: Cookie: %s\n", cnow (), cookie);
     }
 }
 
