@@ -69,8 +69,6 @@ static struct game *games = NULL;
 
 struct player {
     char name[MAX_NAME];
-    char touch;
-    char show;
     struct player *next;
 };
 static struct player *players = NULL;
@@ -175,7 +173,6 @@ save_game (struct game *g)
     char path[MAX_PATH];
     char tmppath[MAX_PATH + 4];
     FILE *out;
-    int i;
 
     sprintf (path, ".chessd/%s", g->name);
     sprintf (tmppath, "%s.tmp", path);
@@ -227,6 +224,44 @@ save_games (void)
     return (rc);
 }
 
+static int
+save_prefs (void)
+{
+    char *path = ".chessd/.prefs";
+    char tmppath[MAX_PATH];
+    FILE *out;
+    struct pref *p;
+
+    sprintf (tmppath, "%s.tmp", path);
+
+    out = fopen (tmppath, "w");
+    if (!out) {
+        fprintf (log_out, "%s: failed to open %s\n", cnow (), tmppath);
+        return (-1);
+    }
+
+    for (p = prefs; p; p = p->next) {
+        if (!p->background_color && !p->color && !p->scale) {
+            continue;
+        }
+        if (fprintf (out, "%s?background-color=%s&color=%s&scale=%.1f\n",
+                     p->ip,
+                     (p->background_color ? p->background_color : ""),
+                     (p->color ? p->color : ""),
+                     p->scale) < 0) {
+            fprintf (log_out, "%s: failed to write %s\n", cnow (), tmppath);
+            return (-1);
+        }
+    }
+
+    if (fclose (out)) {
+        fprintf (log_out, "%s: failed to close %s\n", cnow (), tmppath);
+        return (-1);
+    }
+
+    return (rename (tmppath, path));
+}
+
 static struct player *
 get_player (char *name)
 {
@@ -253,8 +288,6 @@ add_player (char *name)
     p = calloc (1, sizeof (*p));
     strncpy (p->name, name, sizeof (p->name));
     p->name[sizeof (p->name) - 1] = '\0';
-    p->touch = 'N'; //default touch move
-    p->show = 'Y'; //default show moves
     p->next = players;
     players = p;
 
@@ -402,6 +435,145 @@ load_games (void)
     return (rc);
 }
 
+static char *
+dup_html_color (char *buf)
+{
+    int len;
+
+    while (*buf == '+') {
+        ++buf;
+    }
+
+    len = strlen (buf);
+    if (len >= 9 && !strncmp (buf, "%23", 3)) {
+        buf += 2;
+        *buf = '#';
+        *(buf + 7) = '\0';
+        return (strdup (buf));
+    } else if (len > 0 && len < 20) {
+        char *p;
+        for (p = buf; isalpha(*p); ++p);
+        *p = '\0';
+        return (strdup (buf));
+    }
+
+    return (NULL);
+}
+
+static void
+parse_prefs (char *query, struct pref *p)
+{
+    while (query && query[0]) {
+        char *this;
+
+        this = query;
+        if ((query = strchr (query, '&'))) {
+            *query = '\0';
+            ++query;
+        }
+
+        if (!strncmp (this, "background-color=", 17)) {
+            if (p->background_color) {
+                free (p->background_color);
+            }
+            p->background_color = dup_html_color (this + 17);
+        } else if (!strncmp (this, "color=", 6)) {
+            if (p->color) {
+                free (p->color);
+            }
+            p->color = dup_html_color (this + 6);
+        } else if (!strncmp (this, "scale=", 6)) {
+            float scale;
+            scale = atof (this + 6);
+            if (!scale) {
+                p->scale = DEFAULT_SCALE;
+            } else if (scale < 0.5) {
+                p->scale = 0.5;
+            } else if (scale > 5.0) {
+                p->scale = 5.0;
+            } else {
+                p->scale = scale;
+            }
+        }
+    }
+}
+
+static int
+load_prefs (void)
+{
+    char *path = ".chessd/.prefs";
+    FILE *in;
+    char buf[1000];
+    struct pref *p;
+    int c;
+    int i;
+
+    prefs = NULL; //FIXME free existing? shouldn't be any...
+
+    in = fopen (path, "r");
+    if (!in) {
+        return (0);
+    }
+
+    do {
+        p = calloc (1, sizeof (*p));
+
+        /* scan ip */
+        i = 0;
+        while (1) {
+            c = fgetc (in);
+            if (!c || (c == EOF)) {
+                free (p);
+                fclose (in);
+                return (i);
+            }
+            if (!isdigit (c) && (c != '.')) {
+                break;
+            }
+            if (i < MAX_IP - 1) {
+                p->ip[i++] = c;
+            }
+        }
+
+        if (c != '?') {
+            free (p);
+            fclose (in);
+            return (-1);
+        }
+
+        /* scan query */
+        i = 0;
+        while (1) {
+            c = fgetc (in);
+            if (c == EOF) {
+                buf[i] = '\0';
+                break;
+            }
+            if (c == '\n') {
+                c = '\0';
+            }
+            buf[i] = c;
+            if (!c) {
+                break;
+            }
+            if (i < sizeof (buf) - 1) {
+                ++i;
+            }
+        };
+
+        fprintf (log_out, "%s: load_prefs %s?%s\n",
+                 cnow (), p->ip, buf);
+        parse_prefs (buf, p);
+
+        p->next = prefs;
+        prefs = p;
+    } while (c != EOF);
+
+    fclose (in);
+
+    return (0);
+}
+
 static int
 persist (void)
 {
@@ -410,6 +582,13 @@ persist (void)
     if (save_games ()) {
         fprintf (log_out, "%s: save_games failed!\n", cnow ());
         return (1);
+    }
+
+    if (save_prefs ()) {
+        fprintf (log_out, "%s: save_prefs failed!\n", cnow ());
+        return (1);
+    } else {
+        fprintf (log_out, "%s: save_prefs\n", cnow ());
     }
 
     save_sequence = god_sequence;
@@ -1599,7 +1778,7 @@ print_white_name (struct game *g, int link)
     }
 
     if (link) {
-        fprintf (http_out, "<a href=\"/?T%s\">", wn);
+        fprintf (http_out, "<a href=\"/?N%s\">", wn);
     }
 
     fprintf (http_out, fmt, get_color (), get_background_color (), wn);
@@ -1634,7 +1813,7 @@ print_black_name (struct game *g, int link)
     }
 
     if (link) {
-        fprintf (http_out, "<a href=\"/?T%s\">", bn);
+        fprintf (http_out, "<a href=\"/?N%s\">", bn);
     }
 
     fprintf (http_out, fmt, get_color (), get_background_color (), bn);
@@ -2201,29 +2380,6 @@ black_player (char *game_name)
     return (get_player (nmp));
 }
 
-struct player *
-player_to_move (struct game *g)
-{
-    char *vs;
-    char name[MAX_NAME];
-    char *nmp;
-
-    strcpy (name, g->name);
-    vs = strstr (name, VS);
-    if (vs) {
-        if (g->pos[0] == 'W') {
-            *vs = '\0';
-            nmp = name;
-        } else {
-            nmp = vs + VSLEN;
-        }
-    } else {
-        nmp = name;
-    }
-
-    return (get_player (nmp));
-}
-
 static int
 fics_connect (void)
 {
@@ -2496,9 +2652,7 @@ http_play (char *path, char *query)
     int possible = 0;
     int can_move = 0;
     char *create_cookie = NULL;
-    struct player *ptm; //player to move
     int show = 1;
-    int touch = 1;
     char white_name[MAX_NAME];
     char *black_name;
     char *vs;
@@ -2689,19 +2843,13 @@ http_play (char *path, char *query)
     flip = query[FLIP];
 
     /********** SELection queries ***********/
-    if ((ptm = player_to_move (current_game))) {
-        touch = ((ptm->touch == 'Y') ? 1 : 0);
-        show = ((ptm->show == 'Y') ? 1 : 0);
-    }
-
     if ((query[MODE] != 'M')
      && !strcmp (current_game->pos, query + 6)
      && current_game->sel[0] != query[SELX]
      && current_game->sel[1] != query[SELY]
-     && (!touch ||
-         ((current_game->sel[0] == '0' && current_game->sel[1] == '0')
-           && (query[SELX] >= 'a') && (query[SELX] <= 'h')
-           && (query[SELY] >= '1') && (query[SELY] <= '8')))) {
+     && ((query[SELX] == '0' && query[SELY] == '0')
+      || ((query[SELX] >= 'a') && (query[SELX] <= 'h')
+       && (query[SELY] >= '1') && (query[SELY] <= '8')))) {
         if (can_move) {
             if (can_move == 2) {
                 return (http_captcha (path, query));
@@ -2994,7 +3142,7 @@ http_play (char *path, char *query)
                     play_anchor (prom, 'X', flip, 'M', '0', '0', try, NULL);
                     a = 1;
                     ++possible;
-                } else if (!touch && (color (piece) == current_game->pos[0])) {
+                } else if (color (piece) == current_game->pos[0]) {
                     play_anchor (prom, 'X', flip, 'X',
                                  x, y, current_game->pos, NULL);
                     a = 1;
@@ -3255,7 +3403,7 @@ http_games (char *query)
              "            window.location = '?N';\n"
              "            break;\n"
              "          case 9:\n" //tab
-             "            window.location = '/players/%s';\n"
+             "            window.location = '/matches/%s';\n"
              "            return;\n"
              "          case 27:\n" //escape
              "            window.alert('"
@@ -3358,7 +3506,7 @@ http_games (char *query)
         fprintf (http_out, "<a href=\"/?F%s\">showing</a> ", filter);
     }
 
-    fprintf (http_out, "<a href=\"/players/%s\">%s*</a> %s",
+    fprintf (http_out, "<a href=\"/matches/%s\">%s*</a> %s",
              filter, filter,
              ((omm == 'T') ? "to move"
                            : "<a href=\"/\">games</a>"));
@@ -3640,11 +3788,11 @@ http_matches (char *player_path, char *query)
              "a-z: filter opponent\\n"
              "backspace or delete: clear filter\\n"
              "tab: swap colors\\n"
-             "left arrow: return to player list\\n"
-             "right arrow: show games for filter');\n"
+             "left arrow: show games for players on left\\n"
+             "right arrow: show games for players on right');\n"
              "            break;\n"
              "          case 37:\n" //left arrow
-             "            window.location = '/players/%s?%c';\n"
+             "            window.location = '/?N%s';\n"
              "            return;\n"
              "          case 9:\n" //tab
              "            window.location = '/matches/%s?%c%d%s';\n"
@@ -3659,7 +3807,7 @@ http_matches (char *player_path, char *query)
              "            }\n"
              "            return;\n"
              "          case 39:\n" //right arrow
-             "            window.location = '/?F%s';\n"
+             "            window.location = '/?N%s';\n"
              "            return;\n"
              "          case 40:\n" //down arrow
              "            if (document.getElementById(y+1)) {\n"
@@ -3689,34 +3837,34 @@ http_matches (char *player_path, char *query)
              "  <body %s>\n",
              sely, filter, get_background_color (), get_color (), playing_as,
              playing_as, //backspace or delete
-             new_name, ((playing_as == 'W') ? 'b' : 'c'), //left arrow
+             ((playing_as == 'W') ? new_name : filter), //left arrow
              new_name, ((playing_as == 'W') ? 'B' : 'W'), sely, filter, //tab
-             new_name, //right arrow
+             ((playing_as == 'W') ? filter : new_name), //right arrow
              body_style);
 
     if (new_name[0]) {
         if (playing_as != 'W') {
             fprintf (http_out,
-                     "<a id=\"filter\" name=\"filter\" href=\"/players/%s\">%s*</a>"
+                     "<a id=\"filter\" name=\"filter\" href=\"/?N%s\">%s*</a>"
                      " <a href=\"?W%d%s\">vs</a> ",
                      filter, filter,
                      sely, filter);
         }
 
         fprintf (http_out,
-                 "<a href=\"/players/%s\">%s</a>",
+                 "<a href=\"/?N%s\">%s</a>",
                  new_name, new_name);
 
         if (playing_as == 'W') {
             fprintf (http_out,
                      " <a href=\"?B%d%s\">vs</a> "
-                     "<a id=\"filter\" name=\"filter\" href=\"/players/%s\">%s*</a>",
+                     "<a id=\"filter\" name=\"filter\" href=\"/?N%s\">%s*</a>",
                      sely, filter,
                      filter, filter);
         }
     } else {
         fprintf (http_out,
-                 "<a href=\"/players/%s\">%s*</a>",
+                 "<a href=\"/?N%s\">%s*</a>",
                  filter, filter);
     }
 
@@ -3730,15 +3878,11 @@ http_matches (char *player_path, char *query)
 
     y = 0;
     for (p2 = players; p2; p2 = p2->next) {
-        if (p == p2) {
-            continue;
-        }
-
         if (strncmp (filter, p2->name, strlen (filter))) {
             continue;
         }
 
-        if (new_name[0]) {
+        if (new_name[0] && (p != p2)) {
             p1_name = new_name;
             game_name[sizeof (game_name) - 2] = '\0';
             snprintf (game_name, sizeof (game_name), "%s_vs_%s",
@@ -3752,13 +3896,21 @@ http_matches (char *player_path, char *query)
             strcpy (game_name, p1_name);
         }
 
-        fprintf (http_out,
-                 "    <tr>\n"
-                 "      <th align=\"left\">%s</th>\n"
-                 "      <th align=\"left\">%s</th>\n"
-                 "      <td>",
-                 (playing_as == 'W' ? p1_name : p2->name),
-                 (playing_as == 'W' ? p2->name : p1_name));
+        if (playing_as == 'W') {
+            fprintf (http_out,
+                     "    <tr>\n"
+                     "      <th align=\"left\">%s</th>\n"
+                     "      <th align=\"left\"><a href=\"/matches/%s?B\">%s</a></th>\n"
+                     "      <td>",
+                     p1_name, p2->name, p2->name);
+        } else {
+            fprintf (http_out,
+                     "    <tr>\n"
+                     "      <th align=\"left\"><a href=\"/matches/%s\">%s</a></th>\n"
+                     "      <th align=\"left\">%s</th>\n"
+                     "      <td>",
+                     p2->name, p2->name, p1_name);
+        }
 
         fprintf (http_out, "<a id=\"%d\" name=\"%d\" style=\"background-color:%s; color:%s\"",
                  y, y,
@@ -3792,7 +3944,7 @@ http_matches (char *player_path, char *query)
         filter[0] = '\0';
     }
 
-    if (!p && new_name[0]) {
+    if (!y || (!p && new_name[0])) {
         if (filter[0]) {
             game_name[sizeof (game_name) - 2] = '\0';
             snprintf (game_name, sizeof (game_name), "%s_vs_%s",
@@ -3813,222 +3965,12 @@ http_matches (char *player_path, char *query)
                      "      <td><a id=\"%d\" name=\"%d\" style=\"%s\"",
                      ((playing_as == 'W' || !filter[0]) ? new_name : filter),
                      ((playing_as == 'W' && filter[0]) ? filter : new_name),
-                     y, y, (y == sely ? "background-color:white; color:black"
-                                      : ""));
+                     y, y, (y == sely ? style_highlit : ""));
 
             fprintf (http_out,
                      " href=\"/create/%s\">CREATE</a></td>\n    </tr>\n",
                      game_name);
         }
-    }
-
-    fprintf (http_out,
-             "    </table>\n"
-             "  </body>\n"
-             "  </head>\n"
-             "</html>\n");
-
-    return (0);
-}
-
-static int
-http_players (char *player_path, char *query)
-{
-    struct player *p;
-    char filter[MAX_NAME];
-    int y;
-    char selx = 'a';
-    int sely = 0;
-    char *off;
-    char *on;
-
-    filter[0] = '\0';
-
-    if (player_path && player_path[0]) {
-        sanitize_name (filter, player_path + 1);
-        if (query) {
-            char *option = query;
-            switch (*option) {
-            case 'a':
-            case 'b':
-            case 'c':
-            case 'd':
-            case 'e':
-            case 'f':
-                selx = *(option++);
-            default:
-                break;
-            }
-            while (isdigit (*option)) {
-                sely *= 10;
-                sely += (*(option++) - '0');
-            }
-            if (option[0] && (p = get_player (option + 1))) {
-                switch (option[0]) {
-                default:
-                    break;
-                case 'S':
-                    p->show = ((p->show == 'Y') ? 'N' : 'Y');
-                    break;
-                case 'T':
-                    p->touch = ((p->touch == 'Y') ? 'N' : 'Y');
-                    break;
-                }
-            }
-        }
-    }
-
-    fprintf (http_out,
-             "<html>\n"
-             "  <head>\n"
-             "    <meta name=\"robots\" content=\"noindex\">\n"
-             "    <title>players</title>\n"
-             "    <script>\n"
-             "      var timer = null;\n"
-             "      var x = '%c';\n"
-             "      var y = %d;\n"
-             "      var filter = '%s';\n"
-             "      var append = '';\n"
-             "      var bgcol = '%s';\n"
-             "      var col = '%s';\n"
-             "      function auto_reload()\n"
-             "      {\n"
-             "        if (append.length) {\n"
-             "          window.location = '/players/' + filter + append;\n"
-             "        }\n"
-             "      };\n"
-             "      document.onkeydown = function(evt) {\n"
-             "        evt = evt || window.event;\n"
-             "        switch(evt.which) {\n"
-             "          case 8:\n" //backspace
-             "          case 46:\n" //delete
-             "            if (append.length) {\n"
-             "              clearTimeout(timer);\n"
-             "              append = append.substring(0, append.length - 1);\n"
-             "              document.getElementById('filter').innerHTML = filter + append + '*';\n"
-             "              timer = setTimeout('auto_reload()',500);\n"
-             "            } else {\n"
-             "              window.location = '/players/';\n"
-             "            }\n"
-             "            break;\n"
-             "          case 9:\n" //tab
-             "            window.location = '/matches/%s';\n"
-             "            return;\n"
-             "          case 13:\n" //enter
-             "          case 32:\n" //space
-             "            document.getElementById(x+y).click();\n"
-             "            break;\n"
-             "          case 27:\n"
-             "            window.alert('"
-             "arrow keys: navigate links\\n"
-             "space or enter: follow link\\n"
-             "a-z: filter further\\n"
-             "backspace or delete: clear filter\\n"
-             "tab: show matches for filter');\n"
-             "            break;\n"
-             "          case 37:\n" //left arrow
-             "            if (x > 'a') {\n"
-             "              var e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = bgcol;\n"
-             "              e.style.color = col;\n"
-             "              x = String.fromCharCode(x.charCodeAt(0)-1);\n"
-             "              e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = col;\n"
-             "              e.style.color = bgcol;\n"
-             "            }\n"
-             "            break;\n"
-             "          case 38:\n" //up arrow
-             "            if (y > 0) {\n"
-             "              var e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = bgcol;\n"
-             "              e.style.color = col;\n"
-             "              --y;\n"
-             "              e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = col;\n"
-             "              e.style.color = bgcol;\n"
-             "            }\n"
-             "            return;\n"
-             "          case 39:\n" //right arrow
-             "            if (x != 'f') {\n"
-             "              var e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = bgcol;\n"
-             "              e.style.color = col;\n"
-             "              x = String.fromCharCode(x.charCodeAt(0)+1);\n"
-             "              e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = col;\n"
-             "              e.style.color = bgcol;\n"
-             "            }\n"
-             "            break;\n"
-             "          case 40:\n" //down arrow
-             "            if (document.getElementById('a'+(y+1))) {\n"
-             "              var e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = bgcol;\n"
-             "              e.style.color = col;\n"
-             "              ++y;\n"
-             "              e = document.getElementById(x+y);\n"
-             "              e.style.backgroundColor = col;\n"
-             "              e.style.color = bgcol;\n"
-             "            }\n"
-             "            break;\n"
-             "          default:\n" //0-9 and A-Z
-             "            if (evt.which < 48 || evt.which > 90) {\n"
-             "              return;\n"
-             "            }\n"
-             "            if (evt.which > 57 && evt.which < 65) {\n"
-             "              return;\n"
-             "            }\n"
-             "            clearTimeout(timer);\n"
-             "            append += String.fromCharCode(evt.which).toLowerCase();\n"
-             "            document.getElementById('filter').innerHTML = filter + append + '*';\n"
-             "            timer = setTimeout('auto_reload()',500);\n"
-             "            break;\n"
-             "        }\n"
-             "      };\n"
-             "    </script>\n"
-             "  </head>\n"
-             "  <a id=\"filter\" name=\"filter\" href=\"/matches/%s\">%s*</a>\n"
-             "  <body %s>\n"
-             "    <table border>\n"
-             "    <tr>\n"
-             "      <th align=\"left\">name</th>\n"
-             "      <th>playing as</th>\n"
-             "      <th>touch</th>\n"
-             "      <th>show</th>\n"
-             "    </tr>\n",
-             selx, sely, filter, get_background_color (), get_color (),
-             filter, //tab
-             filter, filter,
-             body_style);
-
-    y = 0;
-    off = style_normal;
-    for (p = players; p; p = p->next) {
-        if (strncmp (filter, p->name, strlen (filter))) {
-            continue;
-        }
-
-        if (y == sely) {
-            on = style_highlit;
-        } else {
-            on = off;
-        }
-
-        fprintf (http_out,
-                 "    <tr>\n"
-                 "      <th align=\"left\"><a id=\"a%d\" name=\"a%d\" style=\"%s\" href=\"/?T%s\">%s</a></th>\n"
-                 "      <td><a id=\"b%d\" name=\"b%d\" style=\"%s\" href=\"/matches/%s?W\">white</a>&nbsp;\n"
-                 "          <a id=\"c%d\" name=\"c%d\" style=\"%s\" href=\"/matches/%s?B\">black</a>&nbsp;\n"
-                 "          <a id=\"d%d\" name=\"d%d\" style=\"%s\" href=\"/%s\">both</a></td>\n"
-                 "      <td align=\"center\"><a id=\"e%d\" name=\"e%d\" style=\"%s\" href=\"/players/%s?e%dT%s\">%c</a></td>\n"
-                 "      <td align=\"center\"><a id=\"f%d\" name=\"f%d\" style=\"%s\" href=\"/players/%s?f%dS%s\">%c</a></td>\n"
-                 "    </tr>\n",
-                 y, y, (selx == 'a' ? on : off), p->name, p->name, //name
-                 y, y, (selx == 'b' ? on : off), p->name, //playing as white
-                 y, y, (selx == 'c' ? on : off), p->name, //playing as black
-                 y, y, (selx == 'd' ? on : off), p->name, //playing as both
-                 y, y, (selx == 'e' ? on : off), filter, y, p->name, p->touch,
-                 y, y, (selx == 'f' ? on : off), filter, y, p->name, p->show);
-        ++y;
     }
 
     fprintf (http_out,
@@ -4098,69 +4040,12 @@ print_pref_float (char *name, float value, float default_value)
              name, name, name, (value ? value : default_value));
 }
 
-static char *
-dup_html_color (char *buf)
-{
-    int len;
-
-    while (*buf == '+') {
-        ++buf;
-    }
-
-    len = strlen (buf);
-    if (len >= 9 && !strncmp (buf, "%23", 3)) {
-        buf += 2;
-        *buf = '#';
-        *(buf + 7) = '\0';
-        return (strdup (buf));
-    } else if (len > 0 && len < 20) {
-        char *p;
-        for (p = buf; isalpha(*p); ++p);
-        *p = '\0';
-        return (strdup (buf));
-    }
-
-    return (NULL);
-}
-
 static int
 http_prefs (char *query)
 {
     insure_current_pref ();
 
-    while (query && query[0]) {
-        char *this;
-
-        this = query;
-        if ((query = strchr (query, '&'))) {
-            *query = '\0';
-            ++query;
-        }
-
-        if (!strncmp (this, "background-color=", 17)) {
-            if (current_pref->background_color) {
-                free (current_pref->background_color);
-            }
-            current_pref->background_color = dup_html_color (this + 17);
-        } else if (!strncmp (this, "color=", 6)) {
-            if (current_pref->color) {
-                free (current_pref->color);
-            }
-            current_pref->color = dup_html_color (this + 6);
-        } else if (!strncmp (this, "scale=", 6)) {
-            float scale;
-            scale = atof (this + 6);
-            if (!scale) {
-                current_pref->scale = DEFAULT_SCALE;
-            } else if (scale < 0.5) {
-                current_pref->scale = 0.5;
-            } else if (scale > 5.0) {
-                current_pref->scale = 5.0;
-            } else {
-                current_pref->scale = scale;
-            }
-        }
-    }
+    parse_prefs (query, current_pref);
 
     set_current_pref ();
 
@@ -4247,9 +4132,6 @@ http_respond (char *path, char *query)
     } else if (!strcmp (path, "/prefs")) {
         fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
         return (http_prefs (query));
-    } else if (!strncmp (path, "/players/", 9)) {
-        fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
-        return (http_players (path + 8, query));
     } else if (!strncmp (path, "/matches/", 9)) {
         fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
         return (http_matches (path + 8, query));
@@ -4631,6 +4513,11 @@ main (int argc, char **argv)
 
     if (load_games ()) {
         fprintf (log_out, "%s: load_games failed!\n", cnow ());
+        return (1);
+    }
+
+    if (load_prefs ()) {
+        fprintf (log_out, "%s: load_prefs failed!\n", cnow ());
         return (1);
     }
 
