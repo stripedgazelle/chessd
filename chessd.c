@@ -62,8 +62,8 @@ struct game {
     int can_fics;
     int fics;
     int fics_style;
-    char white_password[MAX_NAME];
-    char black_password[MAX_NAME];
+    char white_password[MAX_NAME]; /* url encoded */
+    char black_password[MAX_NAME]; /* url encoded */
     struct game *next;
 };
 static struct game *games = NULL;
@@ -80,7 +80,7 @@ struct pref {
     char *background_color;
     char *color;
     float scale;
-    char *password;
+    char *password; /* url encoded */
     struct pref *next;
 };
 static struct pref *prefs = NULL;
@@ -467,6 +467,32 @@ dup_html_color (char *buf)
     return (NULL);
 }
 
+/* Always use + for spaces instead of %20 for standard comparability */
+static char *
+standardize_url (char *buf)
+{
+    char *space;
+
+    for (space = buf; *space; ++space) {
+        if (*space == ' ') {
+            *space = '+';
+        }
+    }
+
+    space = buf;
+    while ((space = strstr (space, "%20"))) {
+        char *p;
+
+        *space = '+';
+        p = space + 3;
+        while ((*(p - 2) = *p)) {
+            ++p;
+        }
+    }
+
+    return (buf);
+}
+
 static void
 parse_prefs (char *query, struct pref *p)
 {
@@ -508,7 +534,7 @@ parse_prefs (char *query, struct pref *p)
             }
             this += 9;
             if (*this) {
-                p->password = strdup (this);
+                p->password = standardize_url (strdup (this));
             }
         }
     }
@@ -2750,7 +2776,7 @@ http_play (char *path, char *query)
                        ? current_game->white_password
                        : current_game->black_password;
         if (query[3] == '=') {
-            create_cookie = query + 4;
+            create_cookie = standardize_url (query + 4);
         } else {
             create_cookie = get_password ();
         }
@@ -4112,8 +4138,65 @@ print_pref_float (char *name, float value, float default_value)
 }
 
 static int
+hex_digit_to_int (char c)
+{
+    if (c >= '0' && c <= '9') {
+        return (c - '0');
+    } else if (c >= 'a' && c <= 'f') {
+        return (c - 'a' + 10);
+    } else if (c >= 'A' && c <= 'F') {
+        return (c - 'A' + 10);
+    } else {
+        return (-1);
+    }
+}
+
+static char *
+url_decode (char *encoded, char *decoded)
+{
+    int i;
+    int x;
+    int ascii;
+    char c;
+
+    if (!encoded) {
+        return (NULL);
+    }
+
+    i = 0;
+    while ((c = *(encoded++))) {
+        switch (c) {
+        case '+':
+            c = ' ';
+            break;
+        case '%':
+            c = *(encoded++);
+            x = hex_digit_to_int (c);
+            if (x < 0) {
+                return (NULL);
+            }
+            ascii = x * 16;
+            c = *(encoded++);
+            x = hex_digit_to_int (c);
+            if (x < 0) {
+                return (NULL);
+            }
+            ascii += x;
+            c = ascii;
+            break;
+        }
+        decoded[i++] = c;
+    }
+    decoded[i] = '\0';
+
+    return (decoded);
+}
+
+static int
 http_prefs (char *query)
 {
+    char decoded[MAX_NAME];
+
     insure_current_pref ();
 
     parse_prefs (query, current_pref);
@@ -4162,7 +4245,7 @@ http_prefs (char *query)
     print_pref_float ("scale",
                 current_pref->scale, DEFAULT_SCALE);
     print_pref ("password",
-                current_pref->password, "");
+                url_decode (current_pref->password, decoded), "");
 
     fprintf (http_out,
              "      <input value=\"set preferences\" type=\"submit\" />\n"
