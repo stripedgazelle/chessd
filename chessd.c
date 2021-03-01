@@ -43,6 +43,14 @@ static char body_style[1000];
 static char style_normal[1000];
 static char style_highlit[1000];
 
+struct player {
+    char name[MAX_NAME];
+    char password[MAX_NAME]; /* url encoded */
+    struct player *next;
+};
+static struct player *players = NULL;
+static int players_count = 0;
+
 struct game {
     char name[MAX_NAME];
     char start_pos[66];
@@ -59,21 +67,13 @@ struct game {
     char transcript[MAX_TRANSCRIPT];
     int transcriptlen;
     int seen;
-    int can_fics;
     int fics;
     int fics_style;
-    char white_password[MAX_NAME]; /* url encoded */
-    char black_password[MAX_NAME]; /* url encoded */
+    struct player *white;
+    struct player *black;
     struct game *next;
 };
 static struct game *games = NULL;
-
-struct player {
-    char name[MAX_NAME];
-    struct player *next;
-};
-static struct player *players = NULL;
-static int players_count = 0;
 
 struct pref {
     char ip[MAX_IP];
@@ -125,11 +125,184 @@ cnow (void)
     return (str);
 }
 
+static int
+rb (void)
+{
+    int size;
+    char r[1];
+
+    size = getrandom (r, 1, GRND_NONBLOCK);
+    if (size != 1) {
+        fprintf (log_out, "%s: getrandom failed!\n", cnow ());
+    }
+
+    return (r[0]);
+}
+
+static char *
+fischer (int lb, int db, int q, int n1, int n2, int k)
+{
+    static char pos[66];
+    int temp;
+
+    memcpy (pos,
+            "W++++++++pppppppp++++++++++++++++++++++++++++++++PPPPPPPP++++++++",
+            66);
+
+    /* dark square bishop */
+    temp = 'a' + (db * 2);
+    pos[cti(temp, '8')] = 'b';
+    pos[cti(temp, '1')] = 'B';
+
+    /* light square bishop */
+    temp = 'a' + (lb * 2) + 1;
+    pos[cti(temp, '8')] = 'b';
+    pos[cti(temp, '1')] = 'B';
+
+    /* queen */
+    temp = 'a' - 1;
+    do {
+        while (pos[cti(++temp, '8')] != '+');
+    } while (q-- > 0);
+    pos[cti(temp, '8')] = 'q';
+    pos[cti(temp, '1')] = 'Q';
+
+    /* knight */
+    temp = 'a' - 1;
+    do {
+        while (pos[cti(++temp, '8')] != '+');
+    } while (n1-- > 0);
+    pos[cti(temp, '8')] = 'n';
+    pos[cti(temp, '1')] = 'N';
+
+    /* knight */
+    temp = 'a' - 1;
+    do {
+        while (pos[cti(++temp, '8')] != '+');
+    } while (n2-- > 0);
+    pos[cti(temp, '8')] = 'n';
+    pos[cti(temp, '1')] = 'N';
+
+    /* rook, king, rook */
+    temp = 'a' - 1;
+    while (pos[cti(++temp, '8')] != '+');
+    if (k == 0) {
+        pos[cti(temp, '8')] = 'k';
+        pos[cti(temp, '1')] = 'K';
+    } else if (k < 0) {
+        pos[cti(temp, '8')] = 'o';
+        pos[cti(temp, '1')] = 'O';
+    } else {
+        pos[cti(temp, '8')] = 'r';
+        pos[cti(temp, '1')] = 'R';
+    }
+    while (pos[cti(++temp, '8')] != '+');
+    if (k == 1 || k == -1) {
+        pos[cti(temp, '8')] = 'k';
+        pos[cti(temp, '1')] = 'K';
+    } else {
+        pos[cti(temp, '8')] = 'r';
+        pos[cti(temp, '1')] = 'R';
+    }
+    while (pos[cti(++temp, '8')] != '+');
+    if (k == 2) {
+        pos[cti(temp, '8')] = 'k';
+        pos[cti(temp, '1')] = 'K';
+    } else if (k < 0) {
+        pos[cti(temp, '8')] = 'o';
+        pos[cti(temp, '1')] = 'O';
+    } else {
+        pos[cti(temp, '8')] = 'r';
+        pos[cti(temp, '1')] = 'R';
+    }
+
+    return (pos);
+}
+
+static char *
+classical_pos (void)
+{
+    static char pos[66];
+
+    if (pos[0] != 'W') {
+        memcpy (pos, fischer (2, 1, 2, 1, 2, -1), 66);
+    }
+
+    return (pos);
+}
+
+static char *
+chess960 (void)
+{
+    int lb; // light square bishop 0->b, 1->d, 2->f, 3->h
+    int db; // dark square bishop 0->a, 1->c, 2->e, 3->g
+    int q; // queen 0-5
+    int n1; // knight 0-4
+    int n2; // knight 0-3
+
+    int temp;
+
+    temp = rb ();
+    lb = 3 & temp;
+
+    temp >>= 2;
+    db = 3 & temp;
+
+    temp >>= 2;
+    n2 = 3 & temp;
+
+    do {
+        q = 7 & rb ();
+    } while (q > 5);
+
+    do {
+        n1 = 7 & rb ();
+    } while (n1 > 4);
+
+    return (fischer (lb, db, q, n1, n2, -1));
+}
+
+static char *
+chess2880 (void)
+{
+    int lb; // light square bishop 0->b, 1->d, 2->f, 3->h
+    int db; // dark square bishop 0->a, 1->c, 2->e, 3->g
+    int q; // queen 0-5
+    int n1; // knight 0-4
+    int n2; // knight 0-3
+    int k; // king 0-2
+
+    int temp;
+
+    temp = rb ();
+    lb = 3 & temp;
+
+    temp >>= 2;
+    db = 3 & temp;
+
+    temp >>= 2;
+    n2 = 3 & temp;
+
+    do {
+        q = 7 & rb ();
+    } while (q > 5);
+
+    do {
+        n1 = 7 & rb ();
+    } while (n1 > 4);
+
+    do {
+        k = 3 & rb ();
+    } while (k > 2);
+
+    return (fischer (lb, db, q, n1, n2, k));
+}
+
 static void
 tick_game (struct game *g)
 {
     g->sequence++;
-    if (!g->can_fics) {
+    if (g->white != g->black) {
         god_sequence++;
     }
     g->update_t = time (NULL);
@@ -155,6 +328,29 @@ get_game (char *name)
     }
 
     return (g);
+}
+
+static void
+tick_player (struct player *p)
+{
+    struct game *g;
+
+    if ((g = get_game (p->name))) {
+        tick_game (g);
+    } else {
+        fprintf (log_out, "%s: tick_player failed to find game %s\n",
+                 cnow (), p->name);
+    }
+}
+
+static void
+tick_player_to_move (void)
+{
+    if (current_game->pos[0] == 'W') {
+        tick_player (current_game->white);
+    } else {
+        tick_player (current_game->black);
+    }
 }
 
 static void
@@ -192,12 +388,15 @@ save_game (struct game *g)
      || fwrite (g->transcript, 1, g->transcriptlen, out) < g->transcriptlen
      || fwrite ("\0", 1, 1, out) < 1
      || fwrite (g->chat, 1, g->chatlen, out) < g->chatlen
-     || fwrite ("\0", 1, 1, out) < 1
-     || fprintf (out, "%s", g->white_password) < 0
-     || fwrite ("\0", 1, 1, out) < 1
-     || fprintf (out, "%s", g->black_password) < 0) {
-        fprintf (log_out, "%s: failed to write %s\n", cnow (), tmppath);
+     || fwrite ("\0", 1, 1, out) < 1) {
         return (-1);
+    }
+    if (g->white == g->black) {
+        /* player-specific attributes */
+        if (fprintf (out, "%s", g->white->password) < 0) {
+            fprintf (log_out, "%s: failed to write %s\n", cnow (), tmppath);
+            return (-1);
+        }
     }
 
     if (fclose (out)) {
@@ -283,13 +482,13 @@ get_player (char *name)
     return (NULL);
 }
 
-static void
+static struct player *
 add_player (char *name)
 {
     struct player *p;
 
     if ((p = get_player (name))) {
-        return;
+        return (p);
     }
 
     p = calloc (1, sizeof (*p));
@@ -300,22 +499,29 @@ add_player (char *name)
 
     fprintf (log_out, "%s: add_player %d %s\n",
              cnow (), ++players_count, p->name);
+
+    return (p);
 }
 
 static void
-add_players (char *game_name)
+add_players (struct game *g)
 {
     char *vs;
     char buf[MAX_NAME];
+    struct player *p;
 
-    vs = strstr (game_name, VS);
+    vs = strstr (g->name, VS);
     if (vs) {
-        strcpy (buf, game_name);
-        buf[vs-game_name] = '\0';
-        add_player (buf);
-        add_player (vs + VSLEN);
+        strcpy (buf, g->name);
+        buf[vs-(g->name)] = '\0';
+        p = add_player (buf);
+        g->white = p;
+        p = add_player (vs + VSLEN);
+        g->black = p;
     } else {
-        add_player (game_name);
+        p = add_player (g->name);
+        g->white = p;
+        g->black = p;
     }
 }
 
@@ -358,6 +564,8 @@ load_game (char *name)
         return (NULL);
     }
 
+    add_players (g);
+
     /* scan transcript */
     while ((c = fgetc (in))) {
         if (c == EOF) {
@@ -378,32 +586,45 @@ load_game (char *name)
         }
     }
 
-    /* scan white password */
-    i = 0;
-    while ((c = fgetc (in))) {
-        if (c == EOF) {
-            goto load_game_close;
-        }
-        if (i < MAX_NAME - 1) {
-            g->white_password[i++] = c;
-        }
-    }
-
-    /* scan black password */
-    i = 0;
-    while ((c = fgetc (in))) {
-        if (c == EOF) {
-            goto load_game_close;
-        }
-        if (i < MAX_NAME - 1) {
-            g->black_password[i++] = c;
+    /* player-specific attributes */
+    if (g->white == g->black) {
+        /* scan password */
+        i = 0;
+        while ((c = fgetc (in))) {
+            if (c == EOF) {
+                goto load_game_close;
+            }
+            if (i < MAX_NAME - 1) {
+                g->white->password[i++] = c;
+            }
         }
     }
 
 load_game_close:
     fclose (in);
 
-    add_players (g->name);
+    return (g);
+}
+
+static struct game *
+alloc_game (char *name)
+{
+    struct game *g;
+
+    g = calloc (1, sizeof (*g));
+    g->update_t = time (NULL);
+    strncpy (g->name, name, MAX_NAME);
+    g->sel[0] = '0';
+    g->sel[1] = '0';
+    g->unused[0] = 'X';
+    g->unused[1] = 'X';
+    memcpy (g->start_pos, classical_pos (), 66);
+    memcpy (g->pos, g->start_pos, 66);
+
+    add_players (g);
+    g->next = games;
+    games = g;
+    god_sequence++;
 
     return (g);
 }
@@ -420,9 +641,11 @@ load_games (void)
     mkdir (".chessd", 0777);
     dp = opendir (".chessd/");
     if (dp != NULL) {
+        struct game *g;
+        struct player *p;
+
         while ((ep = readdir (dp))) {
             if (ep->d_name[0] && ep->d_name[0] != '.') {
-                struct game *g;
                 if ((g = load_game (ep->d_name))) {
                     g->next = games;
                     games = g;
@@ -434,6 +657,15 @@ load_games (void)
             }
         }
         closedir (dp);
+
+        /*** insure every player has a game to themselves ***/
+        for (p = players; p; p = p->next) {
+            g = get_game (p->name);
+            if (!g) {
+                g = alloc_game (p->name);
+                tick_game (g);
+            }
+        }
     } else {
         fprintf (log_out, "%s: could not open .chessd/\n", cnow ());
         rc = -1;
@@ -635,179 +867,6 @@ persist (void)
 
     save_sequence = god_sequence;
     return (0);
-}
-
-static int
-rb (void)
-{
-    int size;
-    char r[1];
-
-    size = getrandom (r, 1, GRND_NONBLOCK);
-    if (size != 1) {
-        fprintf (log_out, "%s: getrandom failed!\n", cnow ());
-    }
-
-    return (r[0]);
-}
-
-static char *
-fischer (int lb, int db, int q, int n1, int n2, int k)
-{
-    static char pos[66];
-    int temp;
-
-    memcpy (pos,
-            "W++++++++pppppppp++++++++++++++++++++++++++++++++PPPPPPPP++++++++",
-            66);
-
-    /* dark square bishop */
-    temp = 'a' + (db * 2);
-    pos[cti(temp, '8')] = 'b';
-    pos[cti(temp, '1')] = 'B';
-
-    /* light square bishop */
-    temp = 'a' + (lb * 2) + 1;
-    pos[cti(temp, '8')] = 'b';
-    pos[cti(temp, '1')] = 'B';
-
-    /* queen */
-    temp = 'a' - 1;
-    do {
-        while (pos[cti(++temp, '8')] != '+');
-    } while (q-- > 0);
-    pos[cti(temp, '8')] = 'q';
-    pos[cti(temp, '1')] = 'Q';
-
-    /* knight */
-    temp = 'a' - 1;
-    do {
-        while (pos[cti(++temp, '8')] != '+');
-    } while (n1-- > 0);
-    pos[cti(temp, '8')] = 'n';
-    pos[cti(temp, '1')] = 'N';
-
-    /* knight */
-    temp = 'a' - 1;
-    do {
-        while (pos[cti(++temp, '8')] != '+');
-    } while (n2-- > 0);
-    pos[cti(temp, '8')] = 'n';
-    pos[cti(temp, '1')] = 'N';
-
-    /* rook, king, rook */
-    temp = 'a' - 1;
-    while (pos[cti(++temp, '8')] != '+');
-    if (k == 0) {
-        pos[cti(temp, '8')] = 'k';
-        pos[cti(temp, '1')] = 'K';
-    } else if (k < 0) {
-        pos[cti(temp, '8')] = 'o';
-        pos[cti(temp, '1')] = 'O';
-    } else {
-        pos[cti(temp, '8')] = 'r';
-        pos[cti(temp, '1')] = 'R';
-    }
-    while (pos[cti(++temp, '8')] != '+');
-    if (k == 1 || k == -1) {
-        pos[cti(temp, '8')] = 'k';
-        pos[cti(temp, '1')] = 'K';
-    } else {
-        pos[cti(temp, '8')] = 'r';
-        pos[cti(temp, '1')] = 'R';
-    }
-    while (pos[cti(++temp, '8')] != '+');
-    if (k == 2) {
-        pos[cti(temp, '8')] = 'k';
-        pos[cti(temp, '1')] = 'K';
-    } else if (k < 0) {
-        pos[cti(temp, '8')] = 'o';
-        pos[cti(temp, '1')] = 'O';
-    } else {
-        pos[cti(temp, '8')] = 'r';
-        pos[cti(temp, '1')] = 'R';
-    }
-
-    return (pos);
-}
-
-static char *
-classical_pos (void)
-{
-    static char pos[66];
-
-    if (pos[0] != 'W') {
-        memcpy (pos, fischer (2, 1, 2, 1, 2, -1), 66);
-    }
-
-    return (pos);
-}
-
-static char *
-chess960 (void)
-{
-    int lb; // light square bishop 0->b, 1->d, 2->f, 3->h
-    int db; // dark square bishop 0->a, 1->c, 2->e, 3->g
-    int q; // queen 0-5
-    int n1; // knight 0-4
-    int n2; // knight 0-3
-
-    int temp;
-
-    temp = rb ();
-    lb = 3 & temp;
-
-    temp >>= 2;
-    db = 3 & temp;
-
-    temp >>= 2;
-    n2 = 3 & temp;
-
-    do {
-        q = 7 & rb ();
-    } while (q > 5);
-
-    do {
-        n1 = 7 & rb ();
-    } while (n1 > 4);
-
-    return (fischer (lb, db, q, n1, n2, -1));
-}
-
-static char *
-chess2880 (void)
-{
-    int lb; // light square bishop 0->b, 1->d, 2->f, 3->h
-    int db; // dark square bishop 0->a, 1->c, 2->e, 3->g
-    int q; // queen 0-5
-    int n1; // knight 0-4
-    int n2; // knight 0-3
-    int k; // king 0-2
-
-    int temp;
-
-    temp = rb ();
-    lb = 3 & temp;
-
-    temp >>= 2;
-    db = 3 & temp;
-
-    temp >>= 2;
-    n2 = 3 & temp;
-
-    do {
-        q = 7 & rb ();
-    } while (q > 5);
-
-    do {
-        n1 = 7 & rb ();
-    } while (n1 > 4);
-
-    do {
-        k = 3 & rb ();
-    } while (k > 2);
-
-    return (fischer (lb, db, q, n1, n2, k));
 }
 
 static char *
@@ -1810,11 +1869,10 @@ promotion_links (char flip)
     }
 }
 
-static char *
+static void
 print_white_name (struct game *g, int link)
 {
     char *vs;
-    static char wn[MAX_NAME];
     char *fmt;
 
     if (g->pos[0] == 'W') {
@@ -1823,32 +1881,24 @@ print_white_name (struct game *g, int link)
         fmt = "<span style=\"color:%s; background-color:%s\">%s</span>";
     }
 
-    strcpy (wn, g->name);
-    vs = strstr (wn, VS);
-    if (vs) {
-        *vs = '\0';
-    }
-
     if (link) {
-        fprintf (http_out, "<a href=\"/?N%s\">", wn);
+        fprintf (http_out, "<a href=\"/?N%s\">", g->white->name);
     }
 
-    fprintf (http_out, fmt, get_color (), get_background_color (), wn);
+    fprintf (http_out, fmt,
+             get_color (), get_background_color (), g->white->name);
 
     if (link) {
         fprintf (http_out, "</a>&nbsp;");
     } else {
         fprintf (http_out, "&nbsp;");
     }
-
-    return (wn);
 }
 
-static char *
+static void
 print_black_name (struct game *g, int link)
 {
     char *vs;
-    char *bn;
     char *fmt;
 
     if (g->pos[0] == 'B') {
@@ -1857,26 +1907,18 @@ print_black_name (struct game *g, int link)
         fmt = "<span style=\"color:%s; background-color:%s\">%s</span>";
     }
 
-    vs = strstr (g->name, VS);
-    if (vs) {
-        bn = vs + VSLEN;
-    } else {
-        bn = g->name;
-    }
-
     if (link) {
-        fprintf (http_out, "<a href=\"/?N%s\">", bn);
+        fprintf (http_out, "<a href=\"/?N%s\">", g->black->name);
     }
 
-    fprintf (http_out, fmt, get_color (), get_background_color (), bn);
+    fprintf (http_out, fmt,
+             get_color (), get_background_color (), g->black->name);
 
     if (link) {
         fprintf (http_out, "</a>&nbsp;");
     } else {
         fprintf (http_out, "&nbsp;");
     }
-
-    return (bn);
 }
 
 static void
@@ -2046,7 +2088,7 @@ chatchar (int c)
         int width = 0;
         int maxwidth;
 
-        if (current_game->can_fics) {
+        if (current_game->white == current_game->black) {
             maxwidth = 80;
         } else {
             maxwidth = 60;
@@ -2382,7 +2424,7 @@ http_game (struct game *g, int id, char flip)
     fprintf (http_out, "</table></td>\n");
     fprintf (http_out, "<td valign=\"top\" style=\"background-color: inherit\">\n");
     fprintf (http_out, "<pre id=\"chat\" style=\"background-color: inherit; width:%dpx; height:300px; white-space: pre-wrap; word-break: keep-all; font-size:xx-small;\">%.*s</pre>",
-             (g->can_fics ? 520 : 320),
+             (g->white == g->black ? 520 : 320),
              g->chatlen, g->chat);
     fprintf (http_out, "</td></tr></table>\n");
 
@@ -2518,40 +2560,31 @@ http_captcha (char *path, char *query)
 }
 
 static int
-good_cookie (char *my_cookie)
+good_try (char *claim)
 {
     if (current_game) {
         if (current_game->pos[0] == 'W') {
-            if (current_game->white_password[0]) {
-                if (strcmp (my_cookie, current_game->white_password) == 0) {
+            if (current_game->white->password[0]) {
+                if (strcmp (claim, current_game->white->password) == 0) {
                     return (1);
                 } else {
                     return (strcmp (get_password (),
-                                    current_game->white_password) == 0);
+                                    current_game->white->password) == 0);
                 }
-            }
-            if (current_game->black_password[0]
-             && (strcmp (my_cookie, current_game->black_password) == 0)) {
-                return (-1);
             }
         } else {
-            if (current_game->black_password[0]) {
-                if (strcmp (my_cookie, current_game->black_password) == 0) {
+            if (current_game->black->password[0]) {
+                if (strcmp (claim, current_game->black->password) == 0) {
                     return (1);
                 } else {
                     return (strcmp (get_password (),
-                                    current_game->black_password) == 0);
+                                    current_game->black->password) == 0);
                 }
-            }
-            if (current_game->white_password[0]
-             && (strcmp (my_cookie, current_game->white_password) == 0)) {
-                return (-1);
             }
         }
     }
 
-    if (strlen (my_cookie) == 3
-     && my_cookie[0] + my_cookie[1] == my_cookie[2] + 'a') {
+    if ((strlen (claim) == 3) && (claim[0] + claim[1] == claim[2] + 'a')) {
         return (-1);
     }
 
@@ -2559,20 +2592,31 @@ good_cookie (char *my_cookie)
 }
 
 static void
-print_play_link (int can_move, int flip)
+print_playing_link (int can_move, int prom, int flip)
 {
     char *text;
     if (can_move) {
         char *password = (current_game->pos[0] == 'W')
-                       ? current_game->white_password
-                       : current_game->black_password;
+                       ? current_game->white->password
+                       : current_game->black->password;
+
         if (password[0]) {
-            fprintf (http_out, "playing\n");
+            if (current_game->white == current_game->black) {
+                play_anchor (prom, 'P', flip, 'X',
+                             current_game->sel[0], current_game->sel[1],
+                             current_game->pos, "disown");
+            } else {
+                fprintf (http_out, "play\n");
+            }
+            return;
+        } else if (current_game->white != current_game->black) {
+            fprintf (http_out, "rumble\n");
             return;
         }
-        text = "lock";
+
+        text = "claim";
     } else {
-        text = "unlock";
+        text = "login";
     }
 
     fprintf (http_out, "<a href=\"?P%c%c\">%s</a>\n",
@@ -2629,7 +2673,8 @@ http_password (int flip, int protected)
              flip, current_game->pos[0],
              (strlen (cookie) > 3 ? cookie : ""),
              (protected ? "submit" : "set"),
-             (current_game->pos[0] == 'W' ? "white" : "black"));
+             (current_game->pos[0] == 'W' ? current_game->white->name
+                                          : current_game->black->name));
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'B')) {
         http_game (current_game, -1, flip);
@@ -2717,26 +2762,11 @@ http_play (char *path, char *query)
     char piece;
     int possible = 0;
     int can_move = 0;
-    char *create_cookie = NULL;
     int show = 1;
-    char white_name[MAX_NAME];
-    char *black_name;
     char *vs;
-    char *name;
     char *default_query = "QXXP00";
 
-    can_move = good_cookie (cookie);
-
-    strcpy (white_name, current_game->name);
-    vs = strstr (white_name, VS);
-    if (vs) {
-        *vs = '\0';
-        black_name = vs + VSLEN;
-        current_game->can_fics = 0;
-    } else {
-        black_name = white_name;
-        current_game->can_fics = 1;
-    }
+    can_move = good_try (cookie);
 
     if (!query) {
         query = "";
@@ -2770,31 +2800,47 @@ http_play (char *path, char *query)
         }
     }
 
-    /********** lock query ***********/
+    /********** playing queries ***********/
     if (query[0] == 'P' && query[1] && query[2]) {
+        char *claim = NULL;
         char *password = (query[2] == 'W')
-                       ? current_game->white_password
-                       : current_game->black_password;
+                       ? current_game->white->password
+                       : current_game->black->password;
+
         if (query[3] == '=') {
-            create_cookie = standardize_url (query + 4);
-        } else {
-            create_cookie = get_password ();
+            claim = standardize_url (query + 4);
         }
-        if (create_cookie && create_cookie[0]) {
+
+        if (claim && claim[0]) {
             if (!password[0]) {
                 if (can_move == 2) {
-                    /* Robots might even have a password set in preferences,
-                     * hence we had better still do the captcha here. */
                     return (http_captcha (path, query));
                 }
-                strncpy (password, create_cookie, MAX_NAME);
+                strncpy (password, claim, MAX_NAME);
                 password[MAX_NAME - 1] = '\0';
-                tick ();
+                tick_player_to_move ();
             }
-            can_move = good_cookie (create_cookie);
+            can_move = good_try (claim);
+
+            if (!can_move) {
+                if (query[3] != '=') {
+                    return (http_password (flip, password[0]));
+                }
+            } else {
+                insure_current_pref ();
+                if (current_pref->password != claim) {
+                    if (current_pref->password) {
+                        free (current_pref->password);
+                    }
+                    current_pref->password = strdup (claim);
+                }
+            }
+
             query = default_query;
-        } else {
+        } else if (query[3] != '=') {
             return (http_password (flip, password[0]));
+        } else {
+            query = default_query;
         }
     }
 
@@ -2846,7 +2892,7 @@ http_play (char *path, char *query)
             strcpy (current_game->pos, query + 6);
             strcpy (current_game->start_pos, current_game->pos);
             tick ();
-            can_move = good_cookie (cookie);
+            can_move = good_try (cookie);
         } else if ((query[MODE] == 'M')
          && strcmp (current_game->pos, query + 6)
          && (notation = one_move_diff (current_game->pos, query + 6))) {
@@ -2867,7 +2913,7 @@ http_play (char *path, char *query)
                 transcribe_move (notation);
             }
             tick ();
-            can_move = good_cookie (cookie);
+            can_move = good_try (cookie);
         }
     }
 
@@ -2877,7 +2923,7 @@ http_play (char *path, char *query)
         default:
             break;
         case 'F':
-            if (current_game->can_fics) {
+            if (current_game->white == current_game->black) {
                 if (can_move == 2) {
                     return (http_captcha (path, query));
                 }
@@ -2891,12 +2937,13 @@ http_play (char *path, char *query)
             }
             if (current_game->chatlen) {
                 current_game->chatlen = 0;
-            } else if (!memcmp (current_game->pos, current_game->start_pos, 66)) {
-                current_game->white_password[0] = '\0';
-                current_game->black_password[0] = '\0';
-                can_move = -1;
             }
             break;
+        case 'P':
+            if ((current_game->white == current_game->black)
+             && can_move == 1) {
+                current_game->white->password[0] = '\0';
+            }
         }
     }
 
@@ -2951,13 +2998,8 @@ http_play (char *path, char *query)
              "    <meta name=\"robots\" content=\"noindex\">\n"
              "    <title>%s%s</title>\n"
              "    <script>\n",
-             (can_move ? ((can_move == 1) ? "play " : "kibitz ") : "await "),
+             (can_move ? ((can_move == 1) ? "play " : "spar ") : "await "),
              current_game->name);
-    if (create_cookie && create_cookie[0]) {
-        fprintf (http_out,
-                 "      document.cookie = \"%s; path=%s\";\n",
-                 create_cookie, path);
-    }
     fprintf (http_out,
              "      var timer = null;\n"
              "      var sequence = %d;\n"
@@ -3135,9 +3177,9 @@ http_play (char *path, char *query)
 
     /************** top player ***************/
     if (flip == 'F') {
-        name = print_white_name (current_game, 1);
+        print_white_name (current_game, 1);
     } else {
-        name = print_black_name (current_game, 1);
+        print_black_name (current_game, 1);
     }
 
     /************** top player links ***************/
@@ -3147,13 +3189,6 @@ http_play (char *path, char *query)
         /**** links available only at starting position ****/
         if ((current_game->sel[0] == '0' && current_game->sel[1] == '0')
                 && (!memcmp (current_game->pos, current_game->start_pos, 66))) {
-            if (!current_game->chatlen
-             && (current_game->white_password[0]
-                 || current_game->black_password[0])) {
-                /*** if chat is blank as well, allow passwords to be reset ***/
-                play_anchor (prom, 'B', flip, 'X', '0', '0',
-                             current_game->pos, "reset");
-            }
             play_anchor (prom, 'X', flip, 'S', '0', '0',
                          classical_pos (), "classical");
             play_anchor (prom, 'X', flip, 'S', '0', '0',
@@ -3169,7 +3204,7 @@ http_play (char *path, char *query)
                          current_game->sel[0], current_game->sel[1],
                          current_game->pos, "blank");
         }
-        if (current_game->can_fics) {
+        if (current_game->white == current_game->black) {
             play_anchor (prom, 'F', flip, 'S', '0', '0',
                          current_game->start_pos, "fics");
         }
@@ -3178,7 +3213,7 @@ http_play (char *path, char *query)
     fprintf (http_out, "<a href=\"/\">games</a>\n");
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'B')) {
-        print_play_link (can_move, flip);
+        print_playing_link (can_move, prom, flip);
     }
 
     /************** chess board ***************/
@@ -3277,7 +3312,7 @@ http_play (char *path, char *query)
     /************** chat ***************/
     fprintf (http_out, "<td valign=\"top\">\n");
     fprintf (http_out, "<pre id=\"chat\" style=\"width:%dpx; height:300px; white-space: pre-wrap; word-break: keep-all; font-size:xx-small;\">",
-             (current_game->can_fics ? 520 : 320));
+             (current_game->white == current_game->black ? 520 : 320));
     if (current_game->fics) {
         int i;
         char c;
@@ -3326,9 +3361,9 @@ http_play (char *path, char *query)
 
     /************** bottom player ***************/
     if (flip == 'F') {
-        name = print_black_name (current_game, 1);
+        print_black_name (current_game, 1);
     } else {
-        name = print_white_name (current_game, 1);
+        print_white_name (current_game, 1);
     }
 
     /************** bottom player links ***************/
@@ -3345,7 +3380,7 @@ http_play (char *path, char *query)
     fprintf (http_out, "<a href=\"?C%c\">type</a>\n", flip);
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'W')) {
-        print_play_link (can_move, flip);
+        print_playing_link (can_move, prom, flip);
     }
 
     /************** that's all folks! ***************/
@@ -3713,28 +3748,6 @@ count_games (char *player_name)
     return (count);
 }
 
-static int
-only_game_for_player (struct game *g)
-{
-    char *vs;
-    char buf[MAX_NAME];
-
-    vs = strstr (g->name, VS);
-    if (vs) {
-        strcpy (buf, g->name);
-        buf[vs - g->name] = '\0';
-        if (count_games (buf) <= 1) {
-            return (1);
-        } else if (count_games (vs + VSLEN) <= 1) {
-            return (1);
-        }
-    } else if (count_games (g->name) <= 1) {
-        return (1);
-    }
-
-    return (0);
-}
-
 static void
 purge_old_games (void)
 {
@@ -3743,10 +3756,10 @@ purge_old_games (void)
     time_t now = time (NULL);
 
     while (this_game) {
-        if (!strcmp (this_game->start_pos, this_game->pos)
+        if ((this_game->white != this_game->black)
+         && !strcmp (this_game->start_pos, this_game->pos)
          && (now - this_game->update_t > 86400)
-         && !this_game->chatlen
-         && !only_game_for_player (this_game)) {
+         && !this_game->chatlen) {
             struct game *temp = this_game;
             char path[MAX_PATH];
 
@@ -3795,20 +3808,7 @@ create_game (char *name, int create_players)
         }
     }
 
-    g = calloc (1, sizeof (*g));
-    g->update_t = time (NULL);
-    strcpy (g->name, new_name);
-    g->sel[0] = '0';
-    g->sel[1] = '0';
-    g->unused[0] = 'X';
-    g->unused[1] = 'X';
-    memcpy (g->start_pos, classical_pos (), 66);
-    memcpy (g->pos, g->start_pos, 66);
-    g->next = games;
-    games = g;
-    god_sequence++;
-
-    add_players (new_name);
+    g = alloc_game (new_name);
 
     return (g);
 }
@@ -3816,7 +3816,7 @@ create_game (char *name, int create_players)
 static int
 http_matches (char *player_path, char *query)
 {
-    struct player *p = NULL;
+    struct player *p1 = NULL;
     struct player *p2;
     char playing_as = 'W';
     char new_name[MAX_NAME];
@@ -3840,7 +3840,7 @@ http_matches (char *player_path, char *query)
     new_name[0] = '\0';
     if (player_path[1]) {
         sanitize_name (new_name, player_path + 1);
-        p = get_player (new_name);
+        p1 = get_player (new_name);
     }
 
     fprintf (http_out,
@@ -3961,7 +3961,7 @@ http_matches (char *player_path, char *query)
         }
     } else {
         fprintf (http_out,
-                 "<a href=\"/?N%s\">%s*</a>",
+                 "<a id=\"filter\" name=\"filter\" href=\"/?N%s\">%s*</a>",
                  filter, filter);
     }
 
@@ -3979,7 +3979,7 @@ http_matches (char *player_path, char *query)
             continue;
         }
 
-        if (new_name[0] && (p != p2)) {
+        if (new_name[0] && (p1 != p2)) {
             p1_name = new_name;
             game_name[sizeof (game_name) - 2] = '\0';
             snprintf (game_name, sizeof (game_name), "%s_vs_%s",
@@ -4020,7 +4020,7 @@ http_matches (char *player_path, char *query)
             if (current_game) {
                 fprintf (http_out, " href=\"/%s\">%s</a>\n",
                          game_name, game_name);
-            } else if (p || !new_name[0]) {
+            } else if (p1 || !new_name[0]) {
                 fprintf (http_out, " href=\"/%s\">CREATE</a>\n",
                          game_name);
             } else {
@@ -4041,7 +4041,7 @@ http_matches (char *player_path, char *query)
         filter[0] = '\0';
     }
 
-    if (!y || (!p && new_name[0])) {
+    if (!y || (!p1 && new_name[0])) {
         if (filter[0]) {
             game_name[sizeof (game_name) - 2] = '\0';
             snprintf (game_name, sizeof (game_name), "%s_vs_%s",
@@ -4086,15 +4086,15 @@ http_create (char *path, char *game_path, char *query)
     char *msg = "nothing to do!";
 
     if (game_path[1]) {
-        if (good_cookie (cookie) == 2) {
+        if (good_try (cookie) == 2) {
             return (http_captcha (path, query));
         }
         g = create_game (game_path + 1, 1);
         if (g) {
             if (g->sequence) {
-                msg = "match already exists:";
+                msg = "players already exist:";
             } else {
-                msg = "match created:";
+                msg = "player created:";
             }
         } else {
             msg = "too many players! no room! no room!";
@@ -4192,6 +4192,19 @@ url_decode (char *encoded, char *decoded)
     return (decoded);
 }
 
+static void
+print_loggedin_links (char *password)
+{
+    struct player *p;
+
+    for (p = players; p; p = p->next) {
+        if (!strcmp (password, p->password)) {
+            fprintf (http_out, "<a href=\"/%s\">%s</a>\n",
+                     p->name, p->name);
+        }
+    }
+}
+
 static int
 http_prefs (char *query)
 {
@@ -4231,12 +4244,19 @@ http_prefs (char *query)
              "    </script>\n"
              "  </head>\n"
              "  <body %s>\n"
-             "    <a href=\"/\">games</a>\n"
-             "    <hr />\n"
-             "    <form id=\"form\" method=\"GET\">\n",
+             "    <a href=\"/\">games</a>\n",
              (current_pref->scale ? current_pref->scale : DEFAULT_SCALE) - 0.1,
              (current_pref->scale ? current_pref->scale : DEFAULT_SCALE) + 0.1,
              body_style);
+
+    if (current_pref->password) {
+        print_loggedin_links (current_pref->password);
+        fprintf (http_out, "  | <a href=\"?password=\">logout</a>\n");
+    }
+
+    fprintf (http_out,
+             "    <hr />\n"
+             "    <form id=\"form\" method=\"GET\">\n");
 
     print_pref ("background-color",
                 current_pref->background_color, DEFAULT_BACKGROUND_COLOR);
