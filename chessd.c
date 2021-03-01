@@ -722,6 +722,10 @@ standardize_url (char *buf)
         }
     }
 
+    if (strlen (buf) >= MAX_NAME) {
+        buf[MAX_NAME - 1] = '\0';
+    }
+
     return (buf);
 }
 
@@ -3185,6 +3189,8 @@ http_play (char *path, char *query)
     /************** top player links ***************/
     print_reversed_link (current_game);
 
+    fprintf (http_out, "<a href=\"/\">games</a>\n");
+
     if (can_move && !current_game->fics) {
         /**** links available only at starting position ****/
         if ((current_game->sel[0] == '0' && current_game->sel[1] == '0')
@@ -3209,8 +3215,6 @@ http_play (char *path, char *query)
                          current_game->start_pos, "fics");
         }
     }
-
-    fprintf (http_out, "<a href=\"/\">games</a>\n");
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'B')) {
         print_playing_link (can_move, prom, flip);
@@ -3653,7 +3657,7 @@ http_games (char *query)
         fprintf (http_out, "<a href=\"/?F%s\">showing</a> ", filter);
     }
 
-    fprintf (http_out, "<a href=\"/matches/%s\">%s*</a> %s",
+    fprintf (http_out, "<a href=\"/matches/?B%s\">%s*</a> %s",
              filter, filter,
              ((omm == 'T') ? "to move"
                            : "<a href=\"/\">games</a>"));
@@ -3933,7 +3937,8 @@ http_matches (char *player_path, char *query)
              "      };\n"
              "    </script>\n"
              "  </head>\n"
-             "  <body %s>\n",
+             "  <body %s>\n"
+             "    showing ",
              sely, filter, get_background_color (), get_color (), playing_as,
              playing_as, //backspace or delete
              ((playing_as == 'W') ? new_name : filter), //left arrow
@@ -3968,6 +3973,7 @@ http_matches (char *player_path, char *query)
     }
 
     fprintf (http_out,
+             "    <a href=\"/\">games</a>&nbsp;|&nbsp;<a href=\"/prefs\">preferences</a><hr/>\n"
              "    <table border>\n"
              "    <tr>\n"
              "      <th align=\"left\">white</th>\n"
@@ -4115,6 +4121,16 @@ http_create (char *path, char *game_path, char *query)
 
     if (g) {
         fprintf (http_out, "    <a href=\"/%s\">%s</a>\n", g->name, g->name);
+        if (current_pref
+         && current_pref->password
+         && current_pref->password[0]
+         && (g->white == g->black)
+         && !g->white->password[0]) {
+            strcpy (g->white->password, current_pref->password);
+            tick_player (g->white);
+            fprintf (http_out, "with password set to '%s'\n",
+                     g->white->password);
+        }
     }
 
     fprintf (http_out,
