@@ -4050,6 +4050,7 @@ http_matches (char *player_path, char *query)
     if (filter[0] && !new_name[0]) {
         strcpy (new_name, filter);
         filter[0] = '\0';
+        p1 = get_player (new_name);
     }
 
     if (!y || (!p1 && new_name[0])) {
