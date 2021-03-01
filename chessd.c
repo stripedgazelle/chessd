@@ -2998,7 +2998,7 @@ http_play (char *path, char *query)
              "    <meta name=\"robots\" content=\"noindex\">\n"
              "    <title>%s%s</title>\n"
              "    <script>\n",
-             (can_move ? ((can_move == 1) ? "play " : "spar ") : "await "),
+             (can_move ? ((can_move == 1) ? "play " : "rumble ") : "await "),
              current_game->name);
     fprintf (http_out,
              "      var timer = null;\n"
@@ -3447,6 +3447,35 @@ maybe_expand_game (int y, char onlymymove, int fm, time_t threshold_t,
     return (shown);
 }
 
+static void
+sanitize_name (char *new_name, char *name, int match)
+{
+    int i;
+    char *vs;
+
+    for (i = 0; i < MAX_NAME - 1; ++i) {
+        if (!name[i]) {
+            break;
+        }
+        if (!isalpha(name[i])) {
+            new_name[i] = '_';
+        } else {
+            new_name[i] = tolower (name[i]);
+        }
+    }
+
+    new_name[i] = '\0';
+
+    vs = strstr (new_name, VS);
+    if (vs) {
+        *vs = '\0';
+        if (match && strcmp (new_name, vs + VSLEN)) {
+            /* verified two distinct players */
+            *vs = VS[0];
+        }
+    }
+}
+
 static int
 http_games (char *query)
 {
@@ -3492,7 +3521,9 @@ http_games (char *query)
             threshold_t += (*filter - '0');
             ++filter;
         }
-        if (!filter[0]) {
+        if (filter[0]) {
+            sanitize_name (filter, filter, 0);
+        } else {
             /* it's always someone's move! */
             omm = 'F';
         }
@@ -3693,35 +3724,6 @@ http_games (char *query)
     return (0);
 }
 
-static void
-sanitize_name (char *new_name, char *name)
-{
-    int i;
-    char *vs;
-
-    for (i = 0; i < MAX_NAME - 1; ++i) {
-        if (!name[i]) {
-            break;
-        }
-        if (!isalpha(name[i])) {
-            new_name[i] = '_';
-        } else {
-            new_name[i] = tolower (name[i]);
-        }
-    }
-
-    new_name[i] = '\0';
-
-    vs = strstr (new_name, VS);
-    if (vs) {
-        *vs = '\0';
-        if (strcmp (new_name, vs + VSLEN)) {
-            /* verified two distinct players */
-            *vs = VS[0];
-        }
-    }
-}
-
 static int
 count_games (char *player_name)
 {
@@ -3789,7 +3791,7 @@ create_game (char *name, int create_players)
     struct game *g = NULL;
     char new_name[MAX_NAME];
 
-    sanitize_name (new_name, name);
+    sanitize_name (new_name, name, 1);
     if (!create_players && (strlen (new_name) != strlen (name))) {
         return (NULL);
     }
@@ -3834,12 +3836,12 @@ http_matches (char *player_path, char *query)
             sely *= 10;
             sely += (*p - '0');
         }
-        sanitize_name (filter, p);
+        sanitize_name (filter, p, 0);
     }
 
     new_name[0] = '\0';
     if (player_path[1]) {
-        sanitize_name (new_name, player_path + 1);
+        sanitize_name (new_name, player_path + 1, 0);
         p1 = get_player (new_name);
     }
 
@@ -4094,7 +4096,7 @@ http_create (char *path, char *game_path, char *query)
             if (g->sequence) {
                 msg = "players already exist:";
             } else {
-                msg = "player created:";
+                msg = "players created:";
             }
         } else {
             msg = "too many players! no room! no room!";
