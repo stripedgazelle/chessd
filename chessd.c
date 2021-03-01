@@ -3996,28 +3996,31 @@ http_matches (char *player_path, char *query)
             if (game_name[sizeof (game_name) - 2]) {
                 game_name[0] = '\0';
             }
+
+            if (playing_as == 'W') {
+                fprintf (http_out,
+                         "    <tr>\n"
+                         "      <th align=\"left\">%s</th>\n"
+                         "      <th align=\"left\"><a href=\"/matches/%s?B\">%s</a></th>\n",
+                         p1_name, p2->name, p2->name);
+            } else {
+                fprintf (http_out,
+                         "    <tr>\n"
+                         "      <th align=\"left\"><a href=\"/matches/%s?W\">%s</a></th>\n"
+                         "      <th align=\"left\">%s</th>\n",
+                         p2->name, p2->name, p1_name);
+            }
         } else {
             p1_name = p2->name;
             strcpy (game_name, p1_name);
-        }
-
-        if (playing_as == 'W') {
             fprintf (http_out,
                      "    <tr>\n"
-                     "      <th align=\"left\">%s</th>\n"
-                     "      <th align=\"left\"><a href=\"/matches/%s?B\">%s</a></th>\n"
-                     "      <td>",
-                     p1_name, p2->name, p2->name);
-        } else {
-            fprintf (http_out,
-                     "    <tr>\n"
-                     "      <th align=\"left\"><a href=\"/matches/%s\">%s</a></th>\n"
-                     "      <th align=\"left\">%s</th>\n"
-                     "      <td>",
-                     p2->name, p2->name, p1_name);
+                     "      <th align=\"left\"><a href=\"/matches/%s?W\">%s</a></th>\n"
+                     "      <th align=\"left\"><a href=\"/matches/%s?B\">%s</a></th>\n",
+                     p1_name, p1_name, p1_name, p1_name);
         }
 
-        fprintf (http_out, "<a id=\"%d\" name=\"%d\" style=\"background-color:%s; color:%s\"",
+        fprintf (http_out, "<td><a id=\"%d\" name=\"%d\" style=\"background-color:%s; color:%s\"",
                  y, y,
                  (y == sely ? get_color () : get_background_color ()),
                  (y == sely ? get_background_color () : get_color ()));
