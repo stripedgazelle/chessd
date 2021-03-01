@@ -3439,7 +3439,7 @@ maybe_expand_game (int y, char onlymymove, int fm, time_t threshold_t,
             break;
         }
     default:
-        if (!threshold_t || g->update_t > threshold_t) {
+        if (!threshold_t || (g->update_t > threshold_t)) {
             ++shown;
             http_game (g, y, 'X');
         } else {
@@ -3691,6 +3691,7 @@ http_games (char *query)
             struct game *wg = NULL;
             struct game *bg = NULL;
             struct game *rg = NULL;
+            int wf, bf;
 
             if ((rg = get_game (reversed_name (this_game)))) {
                 rg->seen = 1;
@@ -3699,23 +3700,29 @@ http_games (char *query)
             if (abs (fm) == 1) {
                 /* filtered player has white pieces */
                 wg = this_game;
-                bg = rg;
+                wf = fm;
+                if (rg) {
+                    bg = rg;
+                    bf = filter_match (filter, rg);
+                }
             } else {
                 /* filtered player has black pieces */
-                wg = rg;
+                if (rg) {
+                    wg = rg;
+                    wf = filter_match (filter, rg);
+                }
                 bg = this_game;
-                fm = -fm;
+                bf = fm;
             }
 
             fprintf (http_out, "%s", "<table><tr><td width=\"650px\">\n");
             if (wg) {
-                shown += maybe_expand_game (y, omm, fm, threshold_t, wg);
+                shown += maybe_expand_game (y, omm, wf, threshold_t, wg);
             }
             fprintf (http_out, "</td><td>\n");
             if (bg) {
-                fm = -fm;
                 shown += maybe_expand_game ((wg ? -y : y),
-                                            omm, fm, threshold_t, bg);
+                                            omm, bf, threshold_t, bg);
             }
             fprintf (http_out, "</td></tr></table>\n");
             fprintf (http_out, "<hr/>\n");
