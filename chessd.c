@@ -1798,7 +1798,7 @@ get_password (void)
 }
 
 static void
-http_png (FILE *http_out, char *path)
+http_img (FILE *http_out, char *path)
 {
     struct png *img;
     int len;
@@ -3481,7 +3481,7 @@ sanitize_name (char *new_name, char *name, int match)
 }
 
 static int
-http_games (char *query)
+http_root (char *query)
 {
     struct game *this_game;
     time_t now = time (NULL);
@@ -3493,12 +3493,6 @@ http_games (char *query)
 
     if (!query) {
         query = "N";
-    } else if (query[0] == 'L') {
-        zoom (-0.1);
-        ++query;
-    } else if (query[0] == 'R') {
-        zoom (0.1);
-        ++query;
     }
 
     if (!query[0]) {
@@ -3507,12 +3501,6 @@ http_games (char *query)
 
     switch (query[0]) {
     default:
-        break;
-    case 'S': //Sequence
-        if (strlen (query) == 1) {
-            fprintf (http_out, "%d", god_sequence);
-            return (0);
-        }
         break;
     case 'N': //Filter and only expand when updated after now
         threshold_t = now;
@@ -3588,8 +3576,8 @@ http_games (char *query)
              "            evt.preventDefault();\n"
              "            break;\n"
              "          case 39:\n" //right arrow
-             "            window.location = '?R%s';\n"
              "            evt.preventDefault();\n"
+             "            window.location = '?R%s';\n"
              "            return;\n"
              "          case 40:\n" //down arrow
              "            document.getElementById(y).style.backgroundColor = 'initial';\n"
@@ -3837,17 +3825,27 @@ http_matches (char *player_path, char *query)
     char filter[MAX_NAME];
     char game_name[MAX_NAME];
     int y;
-    int sely = 0;
+    int sely = 1;
 
     filter[0] = '\0';
-    if (query && query[0]) {
-        char *p;
-        playing_as = query[0];
-        for (p = query + 1; isdigit (*p); ++p) {
-            sely *= 10;
-            sely += (*p - '0');
+    if (query) {
+        if (query[0] == 'L') {
+            zoom (-0.1);
+            ++query;
+        } else if (query[0] == 'R') {
+            zoom (0.1);
+            ++query;
         }
-        sanitize_name (filter, p, 0);
+
+        if (query[0]) {
+            char *p;
+            playing_as = query[0];
+            for (p = query + 1; isdigit (*p); ++p) {
+                sely *= 10;
+                sely += (*p - '0');
+            }
+            sanitize_name (filter, p, 0);
+        }
     }
 
     new_name[0] = '\0';
@@ -3877,8 +3875,10 @@ http_matches (char *player_path, char *query)
              "        evt = evt || window.event;\n"
              "        switch(evt.which) {\n"
              "          case 13:\n" //enter
-             "          case 32:\n" //space
              "            document.getElementById(y).click();\n"
+             "            break;\n"
+             "          case 32:\n" //space
+             "            document.getElementById(-y).click();\n"
              "            break;\n"
              "          case 8:\n" //backspace
              "          case 46:\n" //delete
@@ -3893,22 +3893,23 @@ http_matches (char *player_path, char *query)
              "            break;\n"
              "          case 27:\n"
              "            window.alert('"
+             "left arrow: make smaller\\n"
+             "right arrow: make bigger\\n"
              "up and down arrows: navigate links\\n"
-             "space or enter: follow link\\n"
+             "space: follow player link\\n"
+             "enter: follow game link\\n"
              "a-z: filter opponent\\n"
              "backspace or delete: clear filter\\n"
-             "tab: swap colors\\n"
-             "left arrow: show games for players on left\\n"
-             "right arrow: show games for players on right');\n"
+             "tab: swap colors');\n"
              "            break;\n"
              "          case 37:\n" //left arrow
-             "            window.location = '/?N%s';\n"
+             "            window.location = '?L%s';\n"
              "            return;\n"
              "          case 9:\n" //tab
              "            window.location = '/matches/%s?%c%d%s';\n"
              "            return;\n"
              "          case 38:\n" //up arrow
-             "            if (y > 0) {\n"
+             "            if (y > 1) {\n"
              "              document.getElementById(y).style.backgroundColor = bgcol;\n"
              "              document.getElementById(y).style.color = col;\n"
              "              --y;\n"
@@ -3917,7 +3918,8 @@ http_matches (char *player_path, char *query)
              "            }\n"
              "            return;\n"
              "          case 39:\n" //right arrow
-             "            window.location = '/?N%s';\n"
+             "            evt.preventDefault();\n"
+             "            window.location = '?R%s';\n"
              "            return;\n"
              "          case 40:\n" //down arrow
              "            if (document.getElementById(y+1)) {\n"
@@ -3948,9 +3950,9 @@ http_matches (char *player_path, char *query)
              "    showing ",
              sely, filter, get_background_color (), get_color (), playing_as,
              playing_as, //backspace or delete
-             ((playing_as == 'W') ? new_name : filter), //left arrow
+             query, //left arrow
              new_name, ((playing_as == 'W') ? 'B' : 'W'), sely, filter, //tab
-             ((playing_as == 'W') ? filter : new_name), //right arrow
+             query, //right arrow
              body_style);
 
     if (new_name[0]) {
@@ -3988,7 +3990,7 @@ http_matches (char *player_path, char *query)
              "      <th align=\"left\">game</th>\n"
              "    </tr>\n");
 
-    y = 0;
+    y = 1;
     for (p2 = players; p2; p2 = p2->next) {
         if (strncmp (filter, p2->name, strlen (filter))) {
             continue;
@@ -4008,23 +4010,23 @@ http_matches (char *player_path, char *query)
                 fprintf (http_out,
                          "    <tr>\n"
                          "      <th align=\"left\">%s</th>\n"
-                         "      <th align=\"left\"><a href=\"/matches/%s?B\">%s</a></th>\n",
-                         p1_name, p2->name, p2->name);
+                         "      <th align=\"left\"><a id=\"%d\" name=\"%d\" href=\"/matches/%s?B\">%s</a></th>\n",
+                         p1_name, -y, -y, p2->name, p2->name);
             } else {
                 fprintf (http_out,
                          "    <tr>\n"
-                         "      <th align=\"left\"><a href=\"/matches/%s?W\">%s</a></th>\n"
+                         "      <th align=\"left\"><a id=\"%d\" name=\"%d\" href=\"/matches/%s?W\">%s</a></th>\n"
                          "      <th align=\"left\">%s</th>\n",
-                         p2->name, p2->name, p1_name);
+                         -y, -y, p2->name, p2->name, p1_name);
             }
         } else {
             p1_name = p2->name;
             strcpy (game_name, p1_name);
             fprintf (http_out,
                      "    <tr>\n"
-                     "      <th align=\"left\"><a href=\"/matches/%s?W\">%s</a></th>\n"
+                     "      <th align=\"left\"><a id=\"%d\" name=\"%d\" href=\"/matches/%s?W\">%s</a></th>\n"
                      "      <th align=\"left\"><a href=\"/matches/%s?B\">%s</a></th>\n",
-                     p1_name, p1_name, p1_name, p1_name);
+                     -y, -y, p1_name, p1_name, p1_name, p1_name);
         }
 
         fprintf (http_out, "<td><a id=\"%d\" name=\"%d\" style=\"background-color:%s; color:%s\"",
@@ -4323,17 +4325,11 @@ http_respond (char *path, char *query)
 {
     char name[MAX_NAME];
 
-    fprintf (log_out, "%s: %s GET %s?%s\n",
-             cnow (), current_ip, path, query);
-    fflush (log_out);
-
     set_current_pref ();
 
-    if (!strncmp (path, "/images/", 8)) {
-        http_png (http_out, path + 1);
-        return (0);
-    } else if (!strcmp (path, "/favicon.ico")) {
-        http_png (http_out, path + 1);
+    if (!strncmp (path, "/images/", 8)
+     || !strcmp (path, "/favicon.ico")) {
+        http_img (http_out, path + 1);
         return (0);
     } else if (!strcmp (path, "/prefs")) {
         fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
@@ -4355,8 +4351,44 @@ http_respond (char *path, char *query)
 
     if (!current_game) {
         if (!name[0]) {
-            fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
-            return (http_games (query));
+            /* root path request */
+            int pid;
+
+            if (query[0] == 'S' && query[1] == '\0') {
+                fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
+                fprintf (http_out, "%d", god_sequence);
+                return (0);
+            }
+
+            if (query[0] == 'L') {
+                zoom (-0.1);
+                ++query;
+            } else if (query[0] == 'R') {
+                zoom (0.1);
+                ++query;
+            }
+
+            /* all root path requests are read-only, hence we can fork safely */
+            pid = fork ();
+            if (pid > 0) {
+                /* parent */
+                fprintf (log_out, "%s: pid %d: %s GET %s?%s\n",
+                         cnow (), pid, current_ip, path, query);
+                http_out = NULL;
+                return (0);
+            } else {
+                /* child or else failed fork */
+                int rc;
+                fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
+                rc = http_root (query);
+                if (pid < 0) {
+                    fprintf (log_out, "%s: FORK FAILED: %s GET %s?%s\n",
+                             cnow (), current_ip, path, query);
+                    return (rc);
+                }
+                fclose (http_out);
+                exit (0);
+            }
         }
         current_game = create_game (name, 0);
         if (!current_game) {
@@ -4365,6 +4397,10 @@ http_respond (char *path, char *query)
             return (1);
         }
     }
+
+    fprintf (log_out, "%s: %s GET %s?%s\n",
+             cnow (), current_ip, path, query);
+    fflush (log_out);
 
     fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
 
@@ -4711,6 +4747,18 @@ main (int argc, char **argv)
     portno = atoi (argv[1]);
 
     if (roll_log ()) {
+        return (1);
+    }
+
+    struct sigaction act;
+
+    memset (&act, 0, sizeof (act));
+    act.sa_handler = SIG_DFL;
+    act.sa_flags = SA_NOCLDWAIT;
+
+    if (sigaction (SIGCHLD, &act, NULL)) {
+        fprintf (log_out, "%s: Failed to install SIGCHLD handler\n",
+                 cnow ());
         return (1);
     }
 
