@@ -2584,7 +2584,7 @@ http_captcha (char *path, char *query)
 }
 
 static int
-good_try (char *claim)
+good_password (char *claim)
 {
     if (current_game) {
         if (current_game->pos[0] == 'W') {
@@ -2792,7 +2792,7 @@ http_play (char *path, char *query)
     char *default_query = "QXXP00";
 
     single_player = (current_game->white == current_game->black);
-    can_move = good_try (cookie);
+    can_move = good_password (cookie);
 
     if (!query) {
         query = "";
@@ -2846,7 +2846,7 @@ http_play (char *path, char *query)
                 password[MAX_NAME - 1] = '\0';
                 tick_player_to_move ();
             }
-            can_move = good_try (claim);
+            can_move = good_password (claim);
 
             if (!can_move) {
                 if (query[3] != '=') {
@@ -2918,7 +2918,7 @@ http_play (char *path, char *query)
             strcpy (current_game->pos, query + 6);
             strcpy (current_game->start_pos, current_game->pos);
             tick ();
-            can_move = good_try (cookie);
+            can_move = good_password (cookie);
         } else if ((query[MODE] == 'M')
          && strcmp (current_game->pos, query + 6)
          && (notation = one_move_diff (current_game->pos, query + 6))) {
@@ -2939,7 +2939,7 @@ http_play (char *path, char *query)
                 transcribe_move (notation);
             }
             tick ();
-            can_move = good_try (cookie);
+            can_move = good_password (cookie);
         }
     }
 
@@ -4129,74 +4129,6 @@ http_players (char *player_path, char *query)
 }
 
 static int
-http_create (char *path, char *game_path, char *query)
-{
-    struct game *g;
-    char *msg = "nothing to do!";
-
-    if (game_path[1]) {
-        if (good_try (cookie) == 2) {
-            return (http_captcha (path, query));
-        }
-        g = create_game (game_path + 1, 1);
-        if (g) {
-            if (g->sequence) {
-                msg = "players already exist:";
-            } else {
-                msg = "players created:";
-            }
-        } else {
-            msg = "too many players! no room! no room!";
-        }
-    }
-
-    fprintf (http_out,
-             "<html>\n"
-             "  <head>\n"
-             "    <meta name=\"robots\" content=\"noindex\">\n"
-             "    <title>create</title>\n"
-             "  </head>\n"
-             "  <body %s>\n"
-             "    %s\n",
-             body_style, msg);
-
-    if (g) {
-        fprintf (http_out, "    <a href=\"/%s\">%s</a>\n", g->name, g->name);
-        if (current_pref
-         && current_pref->password
-         && current_pref->password[0]
-         && (g->white == g->black)
-         && !g->white->password[0]) {
-            strcpy (g->white->password, current_pref->password);
-            tick_player (g->white);
-            fprintf (http_out, "with password set to '%s'\n",
-                     g->white->password);
-        }
-    }
-
-    fprintf (http_out,
-             "  </body>\n"
-             "  </head>\n"
-             "</html>\n");
-
-    return (0);
-}
-
-static void
-print_pref (char *name, char *value, char *default_value, char *descrip)
-{
-    fprintf (http_out, "%s=<input type=\"text\" id=\"%s\" name=\"%s\" value=\"%s\" />%s<br/>\n",
-             name, name, name, (value ? value : default_value), descrip);
-}
-
-static void
-print_pref_float (char *name, float value, float default_value, char *descrip)
-{
-    fprintf (http_out, "%s=<input type=\"text\" id=\"%s\" name=\"%s\" value=\"%.1f\" />%s<br/>\n",
-             name, name, name, (value ? value : default_value), descrip);
-}
-
-static int
 hex_digit_to_int (char c)
 {
     if (c >= '0' && c <= '9') {
@@ -4249,6 +4181,75 @@ url_decode (char *encoded, char *decoded)
     decoded[i] = '\0';
 
     return (decoded);
+}
+
+static int
+http_create (char *path, char *game_path, char *query)
+{
+    struct game *g;
+    char *msg = "nothing to do!";
+
+    if (game_path[1]) {
+        if (good_password (cookie) == 2) {
+            return (http_captcha (path, query));
+        }
+        g = create_game (game_path + 1, 1);
+        if (g) {
+            if (g->sequence) {
+                msg = "players already exist:";
+            } else {
+                msg = "players created:";
+            }
+        } else {
+            msg = "too many players! no room! no room!";
+        }
+    }
+
+    fprintf (http_out,
+             "<html>\n"
+             "  <head>\n"
+             "    <meta name=\"robots\" content=\"noindex\">\n"
+             "    <title>create</title>\n"
+             "  </head>\n"
+             "  <body %s>\n"
+             "    %s\n",
+             body_style, msg);
+
+    if (g) {
+        fprintf (http_out, "    <a href=\"/%s\">%s</a>\n", g->name, g->name);
+        if (current_pref
+         && current_pref->password
+         && current_pref->password[0]
+         && (g->white == g->black)
+         && !g->white->password[0]) {
+            char decoded[MAX_NAME];
+            strcpy (g->white->password, current_pref->password);
+            tick_player (g->white);
+            fprintf (http_out, "with password set to '%s'\n",
+                     url_decode (g->white->password, decoded));
+        }
+    }
+
+    fprintf (http_out,
+             "  </body>\n"
+             "  </head>\n"
+             "</html>\n");
+
+    return (0);
+}
+
+static void
+print_pref (char *name, char *value, char *default_value)
+{
+    fprintf (http_out, "%s=<input type=\"text\" id=\"%s\" name=\"%s\" value=\"%s\" /><br/>\n",
+             name, name, name, (value ? value : default_value));
+}
+
+static void
+print_pref_float (char *name, float value, float default_value)
+{
+    fprintf (http_out, "%s=<input type=\"text\" id=\"%s\" name=\"%s\" value=\"%.1f\" /><br/>\n",
+             name, name, name, (value ? value : default_value));
 }
 
 static void
@@ -4321,17 +4322,17 @@ http_prefs (char *query)
              current_ip);
 
     print_pref ("background-color",
-                current_pref->background_color, DEFAULT_BACKGROUND_COLOR,
-                "");
+                current_pref->background_color, DEFAULT_BACKGROUND_COLOR);
     print_pref ("color",
-                current_pref->color, DEFAULT_COLOR,
-                "");
+                current_pref->color, DEFAULT_COLOR);
     print_pref_float ("scale",
-                current_pref->scale, DEFAULT_SCALE,
-                "");
-    print_pref ("password",
-                url_decode (current_pref->password, decoded), "",
-                "&nbsp;<a href=\"?password=\">logout</a>\n");
+                current_pref->scale, DEFAULT_SCALE);
+    if (current_pref->password && current_pref->password[0]) {
+        fprintf (http_out, "password=<button id=\"password\" name=\"password\" value=\"\">logout</button><br/>\n");
+    } else {
+        print_pref ("password",
+                    current_pref->password, "");
+    }
 
     fprintf (http_out,
              "      <input value=\"set preferences\" type=\"submit\" />\n"
