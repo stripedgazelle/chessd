@@ -1798,10 +1798,11 @@ get_password (void)
 }
 
 static void
-http_img (FILE *http_out, char *path)
+http_static (char *path)
 {
     struct png *img;
     int len;
+    int pid;
 
     len = strlen (path);
     if ((len < 5) || (len > MAX_PATH) || strcmp (path + len - 4, ".png")) {
@@ -1831,12 +1832,31 @@ http_img (FILE *http_out, char *path)
         fclose (in);
     }
 
-    fprintf (http_out, "HTTP/1.0 200 OK\n"
-             "Cache-Control: public, immutable, max-age=31536000\n"
-             "Content-Length: %d\n"
-             "Content-Type: application/png\n\n",
-             img->size);
-    fwrite (img->data, 1, img->size, http_out);
+    pid = fork ();
+    if (pid > 0) {
+        /* parent */
+        fprintf (log_out, "%s: pid %d: %s GET %s\n",
+                 cnow (), pid, current_ip, path);
+        http_out = NULL;
+    } else {
+        /* child or else failed fork */
+        int rc;
+        fprintf (http_out, "HTTP/1.0 200 OK\n"
+                 "Cache-Control: public, immutable, max-age=31536000\n"
+                 "Content-Length: %d\n"
+                 "Content-Type: application/png\n\n",
+                 img->size);
+        fwrite (img->data, 1, img->size, http_out);
+        if (pid < 0) {
+            fprintf (log_out, "%s: FORK FAILED: %s GET %s\n",
+                     cnow (), current_ip, path);
+            return;
+        }
+        fclose (http_out);
+        exit (0);
+    }
+
+    return;
 }
 
 static void
@@ -3221,7 +3241,7 @@ http_play (char *path, char *query)
 
     if (single_player) {
         fprintf (http_out, "&nbsp|&nbsp<a href=\"/?N%s\">games</a>"
-                           "&nbsp|&nbsp<a href=\"/matches/%s\">players</a>"
+                           "&nbsp|&nbsp<a href=\"/players/%s\">players</a>"
                            "&nbsp|&nbsp<a href=\"/prefs\">preferences</a>\n",
                  current_game->white->name,
                  current_game->white->name);
@@ -3547,7 +3567,7 @@ http_games (char *query)
              "            window.location = '?N';\n"
              "            break;\n"
              "          case 9:\n" //tab
-             "            window.location = '/matches/%s';\n"
+             "            window.location = '/players/%s';\n"
              "            return;\n"
              "          case 27:\n" //escape
              "            window.alert('"
@@ -3661,7 +3681,7 @@ http_games (char *query)
     }
 
     fprintf (http_out,
-             "&nbsp;|&nbsp;<a href=\"/matches/?B%s\">players</a>"
+             "&nbsp;|&nbsp;<a href=\"/players/?B%s\">players</a>"
              "&nbsp;|&nbsp;<a href=\"/prefs\">preferences</a><hr/>\n",
              filter);
 
@@ -3823,7 +3843,7 @@ create_game (char *name, int create_players)
 }
 
 static int
-http_matches (char *player_path, char *query)
+http_players (char *player_path, char *query)
 {
     struct player *p1 = NULL;
     struct player *p2;
@@ -3866,7 +3886,7 @@ http_matches (char *player_path, char *query)
              "<html>\n"
              "  <head>\n"
              "    <meta name=\"robots\" content=\"noindex\">\n"
-             "    <title>matches</title>\n"
+             "    <title>players</title>\n"
              "    <script>\n"
              "      var timer = null;\n"
              "      var y = %d;\n"
@@ -3914,7 +3934,7 @@ http_matches (char *player_path, char *query)
              "            window.location = '?L%s';\n"
              "            return;\n"
              "          case 9:\n" //tab
-             "            window.location = '/matches/%s?%c%d%s';\n"
+             "            window.location = '/players/%s?%c%d%s';\n"
              "            return;\n"
              "          case 38:\n" //up arrow
              "            if (y > 1) {\n"
@@ -4018,12 +4038,12 @@ http_matches (char *player_path, char *query)
                 fprintf (http_out,
                          "    <tr>\n"
                          "      <th align=\"left\">%s</th>\n"
-                         "      <th align=\"left\"><a id=\"%d\" name=\"%d\" href=\"/matches/%s?B\">%s</a></th>\n",
+                         "      <th align=\"left\"><a id=\"%d\" name=\"%d\" href=\"/players/%s?B\">%s</a></th>\n",
                          p1_name, -y, -y, p2->name, p2->name);
             } else {
                 fprintf (http_out,
                          "    <tr>\n"
-                         "      <th align=\"left\"><a id=\"%d\" name=\"%d\" href=\"/matches/%s?W\">%s</a></th>\n"
+                         "      <th align=\"left\"><a id=\"%d\" name=\"%d\" href=\"/players/%s?W\">%s</a></th>\n"
                          "      <th align=\"left\">%s</th>\n",
                          -y, -y, p2->name, p2->name, p1_name);
             }
@@ -4032,8 +4052,8 @@ http_matches (char *player_path, char *query)
             strcpy (game_name, p1_name);
             fprintf (http_out,
                      "    <tr>\n"
-                     "      <th align=\"left\"><a id=\"%d\" name=\"%d\" href=\"/matches/%s?W\">%s</a></th>\n"
-                     "      <th align=\"left\"><a href=\"/matches/%s?B\">%s</a></th>\n",
+                     "      <th align=\"left\"><a id=\"%d\" name=\"%d\" href=\"/players/%s?W\">%s</a></th>\n"
+                     "      <th align=\"left\"><a href=\"/players/%s?B\">%s</a></th>\n",
                      -y, -y, p1_name, p1_name, p1_name, p1_name);
         }
 
@@ -4163,17 +4183,17 @@ http_create (char *path, char *game_path, char *query)
 }
 
 static void
-print_pref (char *name, char *value, char *default_value)
+print_pref (char *name, char *value, char *default_value, char *descrip)
 {
-    fprintf (http_out, "%s=<input type=\"text\" id=\"%s\" name=\"%s\" value=\"%s\" /><br/>\n",
-             name, name, name, (value ? value : default_value));
+    fprintf (http_out, "%s=<input type=\"text\" id=\"%s\" name=\"%s\" value=\"%s\" />%s<br/>\n",
+             name, name, name, (value ? value : default_value), descrip);
 }
 
 static void
-print_pref_float (char *name, float value, float default_value)
+print_pref_float (char *name, float value, float default_value, char *descrip)
 {
-    fprintf (http_out, "%s=<input type=\"text\" id=\"%s\" name=\"%s\" value=\"%.1f\" /><br/>\n",
-             name, name, name, (value ? value : default_value));
+    fprintf (http_out, "%s=<input type=\"text\" id=\"%s\" name=\"%s\" value=\"%.1f\" />%s<br/>\n",
+             name, name, name, (value ? value : default_value), descrip);
 }
 
 static int
@@ -4292,24 +4312,29 @@ http_prefs (char *query)
         fprintf (http_out, "&nbsp;|&nbsp;");
     }
     fprintf (http_out, "<a href=\"/\">games</a>"
-             "&nbsp;|&nbsp;<a href=\"/matches/\">players</a>\n");
+             "&nbsp;|&nbsp;<a href=\"/players/\">players</a>\n");
 
     fprintf (http_out,
              "    <hr />\n"
-             "    <form id=\"form\" method=\"GET\">\n");
+             "    <b>Preferences for I.P. address %s:</b>\n"
+             "    <form id=\"form\" method=\"GET\">\n",
+             current_ip);
 
     print_pref ("background-color",
-                current_pref->background_color, DEFAULT_BACKGROUND_COLOR);
+                current_pref->background_color, DEFAULT_BACKGROUND_COLOR,
+                "");
     print_pref ("color",
-                current_pref->color, DEFAULT_COLOR);
+                current_pref->color, DEFAULT_COLOR,
+                "");
     print_pref_float ("scale",
-                current_pref->scale, DEFAULT_SCALE);
+                current_pref->scale, DEFAULT_SCALE,
+                "");
     print_pref ("password",
-                url_decode (current_pref->password, decoded), "");
+                url_decode (current_pref->password, decoded), "",
+                "&nbsp;<a href=\"?password=\">logout</a>\n");
 
     fprintf (http_out,
              "      <input value=\"set preferences\" type=\"submit\" />\n"
-             "      <a href=\"?password=\">logout</a>\n"
              "    </form>\n"
              "    Or you can use the left and right arrows to change scale<br/>\n"
              "    and can use the palette below to choose colors:\n"
@@ -4339,14 +4364,14 @@ http_respond (char *path, char *query)
 
     if (!strncmp (path, "/images/", 8)
      || !strcmp (path, "/favicon.ico")) {
-        http_img (http_out, path + 1);
+        http_static (path + 1);
         return (0);
     } else if (!strcmp (path, "/prefs")) {
         fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
         return (http_prefs (query));
-    } else if (!strncmp (path, "/matches/", 9)) {
+    } else if (!strncmp (path, "/players/", 9)) {
         fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
-        return (http_matches (path + 8, query));
+        return (http_players (path + 8, query));
     } else if (!strncmp (path, "/create/", 8)) {
         fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
         return (http_create (path, path + 7, query));
