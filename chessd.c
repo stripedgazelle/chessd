@@ -1886,7 +1886,7 @@ print_white_name (struct game *g, int link)
     }
 
     if (link) {
-        fprintf (http_out, "<a href=\"/?N%s\">", g->white->name);
+        fprintf (http_out, "<a href=\"/%s\">", g->white->name);
     }
 
     fprintf (http_out, fmt,
@@ -1912,7 +1912,7 @@ print_black_name (struct game *g, int link)
     }
 
     if (link) {
-        fprintf (http_out, "<a href=\"/?N%s\">", g->black->name);
+        fprintf (http_out, "<a href=\"/%s\">", g->black->name);
     }
 
     fprintf (http_out, fmt,
@@ -2766,10 +2766,12 @@ http_play (char *path, char *query)
     char piece;
     int possible = 0;
     int can_move = 0;
+    int single_player;
     int show = 1;
     char *vs;
     char *default_query = "QXXP00";
 
+    single_player = (current_game->white == current_game->black);
     can_move = good_try (cookie);
 
     if (!query) {
@@ -2927,7 +2929,7 @@ http_play (char *path, char *query)
         default:
             break;
         case 'F':
-            if (current_game->white == current_game->black) {
+            if (single_player) {
                 if (can_move == 2) {
                     return (http_captcha (path, query));
                 }
@@ -2944,8 +2946,7 @@ http_play (char *path, char *query)
             }
             break;
         case 'P':
-            if ((current_game->white == current_game->black)
-             && can_move == 1) {
+            if (single_player && (can_move == 1)) {
                 current_game->white->password[0] = '\0';
             }
         }
@@ -3181,15 +3182,13 @@ http_play (char *path, char *query)
 
     /************** top player ***************/
     if (flip == 'F') {
-        print_white_name (current_game, 1);
+        print_white_name (current_game, !single_player);
     } else {
-        print_black_name (current_game, 1);
+        print_black_name (current_game, !single_player);
     }
 
     /************** top player links ***************/
     print_reversed_link (current_game);
-
-    fprintf (http_out, "<a href=\"/\">games</a>\n");
 
     if (can_move && !current_game->fics) {
         /**** links available only at starting position ****/
@@ -3198,7 +3197,7 @@ http_play (char *path, char *query)
             play_anchor (prom, 'X', flip, 'S', '0', '0',
                          classical_pos (), "classical");
             play_anchor (prom, 'X', flip, 'S', '0', '0',
-                         chess960 (), "chess960");
+                         chess960 (), "960");
             play_anchor (prom, 'X', flip, 'S', '0', '0',
                          chess2880 (), "dynamite");
         } else {
@@ -3210,7 +3209,7 @@ http_play (char *path, char *query)
                          current_game->sel[0], current_game->sel[1],
                          current_game->pos, "blank");
         }
-        if (current_game->white == current_game->black) {
+        if (single_player) {
             play_anchor (prom, 'F', flip, 'S', '0', '0',
                          current_game->start_pos, "fics");
         }
@@ -3218,6 +3217,14 @@ http_play (char *path, char *query)
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'B')) {
         print_playing_link (can_move, prom, flip);
+    }
+
+    if (single_player) {
+        fprintf (http_out, "&nbsp|&nbsp<a href=\"/?N%s\">games</a>"
+                           "&nbsp|&nbsp<a href=\"/matches/%s\">players</a>"
+                           "&nbsp|&nbsp<a href=\"/prefs\">preferences</a>\n",
+                 current_game->white->name,
+                 current_game->white->name);
     }
 
     /************** chess board ***************/
@@ -3316,7 +3323,7 @@ http_play (char *path, char *query)
     /************** chat ***************/
     fprintf (http_out, "<td valign=\"top\">\n");
     fprintf (http_out, "<pre id=\"chat\" style=\"width:%dpx; height:300px; white-space: pre-wrap; word-break: keep-all; font-size:xx-small;\">",
-             (current_game->white == current_game->black ? 520 : 320));
+             (single_player ? 520 : 320));
     if (current_game->fics) {
         int i;
         char c;
@@ -3365,9 +3372,9 @@ http_play (char *path, char *query)
 
     /************** bottom player ***************/
     if (flip == 'F') {
-        print_black_name (current_game, 1);
+        print_black_name (current_game, !single_player);
     } else {
-        print_white_name (current_game, 1);
+        print_white_name (current_game, !single_player);
     }
 
     /************** bottom player links ***************/
@@ -3481,7 +3488,7 @@ sanitize_name (char *new_name, char *name, int match)
 }
 
 static int
-http_root (char *query)
+http_games (char *query)
 {
     struct game *this_game;
     time_t now = time (NULL);
@@ -3549,7 +3556,7 @@ http_root (char *query)
              "a-z: filter further\\n"
              "backspace or delete: clear filter\\n"
              "space: toggle showing boards to move versus all\\n"
-             "?: show boards upon next update\\n"
+             "?: show boards upon update\\n"
              "up or down arrow: change focus to a different row\\n"
              "enter: play or kibitz game on left of focus row\\n"
              "tab: players list');\n"
@@ -3645,17 +3652,18 @@ http_root (char *query)
         fprintf (http_out, "<a href=\"/?F%s\">showing</a> ", filter);
     }
 
-    fprintf (http_out, "<a href=\"/matches/?B%s\">%s*</a> %s",
-             filter, filter,
-             ((omm == 'T') ? "to move"
-                           : "<a href=\"/\">games</a>"));
+    fprintf (http_out, "<a href=\"/\">%s*</a> %s",
+             filter,
+             ((omm == 'T') ? "to move" : ""));
 
     if (threshold_t) {
-        fprintf (http_out, " on next update");
+        fprintf (http_out, " upon update");
     }
 
     fprintf (http_out,
-             "&nbsp;|&nbsp;<a href=\"/prefs\">preferences</a><hr/>\n");
+             "&nbsp;|&nbsp;<a href=\"/matches/?B%s\">players</a>"
+             "&nbsp;|&nbsp;<a href=\"/prefs\">preferences</a><hr/>\n",
+             filter);
 
     for (this_game = games; this_game; this_game = this_game->next)
     {
@@ -3958,37 +3966,37 @@ http_matches (char *player_path, char *query)
     if (new_name[0]) {
         if (playing_as != 'W') {
             fprintf (http_out,
-                     "<a id=\"filter\" name=\"filter\" href=\"/?N%s\">%s*</a>"
+                     "<a id=\"filter\" name=\"filter\" href=\"?%c\">%s*</a>"
                      " <a href=\"?W%d%s\">vs</a> ",
-                     filter, filter,
+                     playing_as, filter,
                      sely, filter);
         }
 
-        fprintf (http_out,
-                 "<a href=\"/?N%s\">%s</a>",
-                 new_name, new_name);
+        fprintf (http_out, "<a href=\"/%s\">%s</a>", new_name, new_name);
 
         if (playing_as == 'W') {
             fprintf (http_out,
                      " <a href=\"?B%d%s\">vs</a> "
-                     "<a id=\"filter\" name=\"filter\" href=\"/?N%s\">%s*</a>",
+                     "<a id=\"filter\" name=\"filter\" href=\"?%c\">%s*</a>",
                      sely, filter,
-                     filter, filter);
+                     playing_as, filter);
         }
     } else {
         fprintf (http_out,
-                 "<a id=\"filter\" name=\"filter\" href=\"/?N%s\">%s*</a>",
-                 filter, filter);
+                 "<a id=\"filter\" name=\"filter\" href=\"?%c\">%s*</a>",
+                 playing_as, filter);
     }
 
     fprintf (http_out,
-             "    <a href=\"/\">games</a>&nbsp;|&nbsp;<a href=\"/prefs\">preferences</a><hr/>\n"
+             "    &nbsp;|&nbsp;<a href=\"/?N%s\">games</a>"
+             "    &nbsp;|&nbsp;<a href=\"/prefs\">preferences</a><hr/>\n"
              "    <table border>\n"
              "    <tr>\n"
              "      <th align=\"left\">white</th>\n"
              "      <th align=\"left\">black</th>\n"
              "      <th align=\"left\">game</th>\n"
-             "    </tr>\n");
+             "    </tr>\n",
+             (new_name[0] ? new_name : filter));
 
     y = 1;
     for (p2 = players; p2; p2 = p2->next) {
@@ -4274,16 +4282,17 @@ http_prefs (char *query)
              "      };\n"
              "    </script>\n"
              "  </head>\n"
-             "  <body %s>\n"
-             "    <a href=\"/\">games</a>\n",
+             "  <body %s>\n",
              (current_pref->scale ? current_pref->scale : DEFAULT_SCALE) - 0.1,
              (current_pref->scale ? current_pref->scale : DEFAULT_SCALE) + 0.1,
              body_style);
 
     if (current_pref->password) {
         print_loggedin_links (current_pref->password);
-        fprintf (http_out, "  | <a href=\"?password=\">logout</a>\n");
+        fprintf (http_out, "&nbsp;|&nbsp;");
     }
+    fprintf (http_out, "<a href=\"/\">games</a>"
+             "&nbsp;|&nbsp;<a href=\"/matches/\">players</a>\n");
 
     fprintf (http_out,
              "    <hr />\n"
@@ -4300,6 +4309,7 @@ http_prefs (char *query)
 
     fprintf (http_out,
              "      <input value=\"set preferences\" type=\"submit\" />\n"
+             "      <a href=\"?password=\">logout</a>\n"
              "    </form>\n"
              "    Or you can use the left and right arrows to change scale<br/>\n"
              "    and can use the palette below to choose colors:\n"
@@ -4380,7 +4390,7 @@ http_respond (char *path, char *query)
                 /* child or else failed fork */
                 int rc;
                 fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
-                rc = http_root (query);
+                rc = http_games (query);
                 if (pid < 0) {
                     fprintf (log_out, "%s: FORK FAILED: %s GET %s?%s\n",
                              cnow (), current_ip, path, query);
