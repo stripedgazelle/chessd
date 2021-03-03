@@ -64,8 +64,6 @@ struct game {
     int chatlen;
     int chatshift;
     int movenum;
-    char transcript[MAX_TRANSCRIPT];
-    int transcriptlen;
     int seen;
     int fics;
     int fics_style;
@@ -385,7 +383,6 @@ save_game (struct game *g)
                  g->unused[0], g->unused[1], g->start_pos, g->movenum) < 0
      || fprintf (out, "%c%c%.65s%d\n",
                  g->sel[0], g->sel[1], g->pos, g->sequence) < 0
-     || fwrite (g->transcript, 1, g->transcriptlen, out) < g->transcriptlen
      || fwrite ("\0", 1, 1, out) < 1
      || fwrite (g->chat, 1, g->chatlen, out) < g->chatlen
      || fwrite ("\0", 1, 1, out) < 1) {
@@ -466,6 +463,48 @@ save_prefs (void)
     }
 
     return (rename (tmppath, path));
+}
+
+static int
+save_move (struct game *g)
+{
+    char path[MAX_PATH];
+    FILE *out;
+    int rc = 0;
+
+    fprintf (log_out, "%s: save_move %s movenum %d\n", cnow (), g->name, g->movenum);
+
+    sprintf (path, ".chessd/%s.pos", g->name);
+
+    out = fopen (path, (g->movenum ? "a" : "w"));
+    if (!out) {
+        fprintf (log_out, "%s: failed to open %s\n", cnow (), path);
+        return (-1);
+    }
+
+    if (!g->movenum) {
+        if (fprintf (out, "%.65s\n", g->start_pos) < 0) {
+            rc = -1;
+            goto save_move_close;
+        }
+        if (!memcmp (g->start_pos, g->pos, 66)) {
+            fprintf (log_out, "%s: save_move at start\n", cnow ());
+            goto save_move_close;
+        }
+    }
+
+    if (fprintf (out, "%.65s\n", g->pos) < 0) {
+        rc = -1;
+    }
+
+save_move_close:
+
+    if (fclose (out)) {
+        fprintf (log_out, "%s: failed to close %s\n", cnow (), path);
+        rc = -1;
+    }
+
+    return (rc);
 }
 
 static struct player *
@@ -551,8 +590,9 @@ load_game (char *name)
                 &g->unused[0], &g->unused[1], g->start_pos, &g->movenum);
     if (c != 4) {
         free (g);
+        g = NULL;
         fprintf (log_out, "%s: failed to scan %s\n", cnow (), path);
-        return (NULL);
+        goto load_game_close;
     }
 
     /* scan current position */
@@ -560,19 +600,17 @@ load_game (char *name)
                 &g->sel[0], &g->sel[1], g->pos, &g->sequence);
     if (c != 4) {
         free (g);
+        g = NULL;
         fprintf (log_out, "%s: failed to scan %s\n", cnow (), path);
-        return (NULL);
+        goto load_game_close;
     }
 
     add_players (g);
 
-    /* scan transcript */
+    /* scan unused */
     while ((c = fgetc (in))) {
         if (c == EOF) {
             goto load_game_close;
-        }
-        if (g->transcriptlen < MAX_TRANSCRIPT) {
-            g->transcript[g->transcriptlen++] = c;
         }
     } while (c);
 
@@ -645,7 +683,7 @@ load_games (void)
         struct player *p;
 
         while ((ep = readdir (dp))) {
-            if (ep->d_name[0] && ep->d_name[0] != '.') {
+            if (ep->d_name[0] && !strchr (ep->d_name, '.')) {
                 if ((g = load_game (ep->d_name))) {
                     g->next = games;
                     games = g;
@@ -1945,20 +1983,11 @@ print_black_name (struct game *g, int link)
     }
 }
 
-static void
-transcribe (char *str)
-{
-    while (*str && current_game->transcriptlen < MAX_TRANSCRIPT) {
-        char c = *(str++);
-        current_game->transcript[current_game->transcriptlen++] = c;
-    }
-}
-
-static void
-transcribe_fen (void)
+static char *
+pos2fen (char *pos, int movenum)
 {
     int i;
-    char fen[100];
+    static char fen[100];
     char *p;
     char *temp;
     int blanks = 0;
@@ -1987,7 +2016,7 @@ transcribe_fen (void)
             *(p++) = '/';
         }
 
-        square = current_game->pos[i+1];
+        square = pos[i+1];
 
         if (blanks && (square != '+')) {
             *(p++) = '0' + blanks;
@@ -2049,7 +2078,7 @@ transcribe_fen (void)
 
     *(p++) = ' ';
 
-    *(p++) = tolower (current_game->pos[0]);
+    *(p++) = tolower (pos[0]);
 
     *(p++) = ' ';
 
@@ -2075,8 +2104,9 @@ transcribe_fen (void)
 
     *(p++) = ' ';
 
-    sprintf (p, "%d\" ]\n", current_game->movenum + 1);
-    transcribe (fen);
+    sprintf (p, "%d\" ]\n", movenum + 1);
+
+    return (fen);
 }
 
 static void
@@ -2331,7 +2361,7 @@ chatquery (char *str)
 }
 
 static void
-transcribe_move (char *notation)
+chat_move (char *notation)
 {
     char str[15];
     if (current_game->pos[0] == 'W') {
@@ -2339,19 +2369,13 @@ transcribe_move (char *notation)
         chatstr (notation);
         chatstr (" == ");
         if (!current_game->movenum) {
-            sprintf (str, "%d. ...", ++current_game->movenum);
-            transcribe (str);
+            ++current_game->movenum;
         }
-        transcribe (" ");
-        transcribe (notation);
-        transcribe ("\n");
     } else {
         chatstr ("\n");
         chatstr (notation);
         chatstr (" ... == ");
-        sprintf (str, "%d. ", ++current_game->movenum);
-        transcribe (str);
-        transcribe (notation);
+        ++current_game->movenum;
     }
 }
 
@@ -2673,7 +2697,7 @@ http_chat (int flip)
 }
 
 static int
-http_password (int flip, int protected)
+http_password (char flip, int protected)
 {
     fprintf (http_out,
              "<html>\n"
@@ -2770,6 +2794,16 @@ zoom (float change)
     set_current_pref ();
 }
 
+static int
+get_lasthalfmove (struct game *g)
+{
+    if (g->pos[0] == 'W') {
+        return (g->movenum * 2);
+    } else {
+        return (g->movenum * 2) - 1;
+    }
+}
+
 #define PROMOTE 0
 #define NETW 1
 #define FLIP 2
@@ -2779,7 +2813,7 @@ zoom (float change)
 static int
 http_play (char *path, char *query)
 {
-    char flip;
+    char flip = 'X';
     char try[66];
     int toggle;
     char y, x;
@@ -2802,18 +2836,6 @@ http_play (char *path, char *query)
     }
     if (flip == 'F') {
         default_query = "QXFP00";
-    }
-
-    /********** zoom query ***********/
-    if (query[0] == 'Z' && query[1]) {
-        switch (query[2]) {
-        case 'L':
-            zoom (-0.1);
-            break;
-        case 'R':
-            zoom (0.1);
-            break;
-        }
     }
 
     /********** chat query ***********/
@@ -2876,13 +2898,6 @@ http_play (char *path, char *query)
         fprintf (http_out, "%d", current_game->sequence);
         return (0);
     } else if (strlen (query) < 6) {
-        /********** transcript query ***********/
-        if (!strcmp (query, "T")) {
-            fprintf (http_out, "<html><pre>%.*s</pre></html>",
-                     current_game->transcriptlen,
-                     current_game->transcript);
-            return (0);
-        }
         query = default_query;
     } else if (can_move && (strlen (query) == 71)) {
         /********** MODE queries ***********/
@@ -2895,7 +2910,6 @@ http_play (char *path, char *query)
                 return (http_captcha (path, query));
             }
 
-            current_game->transcriptlen = 0;
             current_game->movenum = 0;
             current_game->sel[0] = '0';
             current_game->sel[1] = '0';
@@ -2912,11 +2926,14 @@ http_play (char *path, char *query)
             {
                 strcpy (rg->pos, query + 6);
                 strcpy (rg->start_pos, rg->pos);
+                rg->movenum = 0;
+                save_move (rg);
                 tick_game (rg);
             }
 
             strcpy (current_game->pos, query + 6);
             strcpy (current_game->start_pos, current_game->pos);
+            save_move (current_game);
             tick ();
             can_move = good_password (cookie);
         } else if ((query[MODE] == 'M')
@@ -2924,9 +2941,6 @@ http_play (char *path, char *query)
          && (notation = one_move_diff (current_game->pos, query + 6))) {
             if (can_move == 2) {
                 return (http_captcha (path, query));
-            }
-            if (!current_game->movenum) {
-                transcribe_fen ();
             }
             strcpy (current_game->pos, query + 6);
             current_game->sel[0] = '0';
@@ -2936,10 +2950,11 @@ http_play (char *path, char *query)
                     send2fics (notation);
                     send2fics ("\n");
                 }
-                transcribe_move (notation);
+                chat_move (notation);
             }
+            save_move (current_game);
             tick ();
-            can_move = good_password (cookie);
+            can_move = good_password (cookie); /* opposite color now to play */
         }
     }
 
@@ -2989,8 +3004,8 @@ http_play (char *path, char *query)
     /********** SELection queries ***********/
     if ((query[MODE] != 'M')
      && !strcmp (current_game->pos, query + 6)
-     && current_game->sel[0] != query[SELX]
-     && current_game->sel[1] != query[SELY]
+     && (current_game->sel[0] != query[SELX]
+         || current_game->sel[1] != query[SELY])
      && ((query[SELX] == '0' && query[SELY] == '0')
       || ((query[SELX] >= 'a') && (query[SELX] <= 'h')
        && (query[SELY] >= '1') && (query[SELY] <= '8')))) {
@@ -3044,6 +3059,9 @@ http_play (char *path, char *query)
              "            }\n"
              "            chat = chat.substring(0,chat.length-1);\n"
              "            break;\n"
+             "          case 9:\n" //tab
+             "            document.getElementById('flip').click();\n"
+             "            break;\n"
              "          case 13:\n" //enter
              "            chat += String.fromCharCode(10);\n"
              "            delay = 500;\n"
@@ -3052,8 +3070,9 @@ http_play (char *path, char *query)
              "            window.alert('"
              "left arrow: make smaller\\n"
              "right arrow: make bigger\\n"
-             "up arrow: orient board with white at top\\n"
-             "down arrow: orient board with white at bottom\\n"
+             "up arrow: show replay from end\\n"
+             "down arrow: default orientation\\n"
+             "tab: flip board\\n"
              "a-z,space,enter,backspace,etc: chat');\n"
              "          case 32:\n" //space
              "            chat += ' ';\n"
@@ -3063,21 +3082,21 @@ http_play (char *path, char *query)
              "            if (keys.length) {\n"
              "              delay = 10;\n"
              "            } else {\n"
-             "              window.location = '?Z%cL';\n"
+             "              window.location = '?zX%c';\n"
              "            }\n"
              "            break;\n"
              "          case 40:\n" //down arrow
-             "            %s\n"
+             "            window.location = '?';\n"
              "            break;\n"
              "          case 38:\n" //up arrow
-             "            %s\n"
+             "            window.location = '?T%c%d';\n"
              "            break;\n"
              "          case 39:\n" //right arrow
              "            evt.preventDefault();\n"
              "            if (keys.length) {\n"
              "              delay = 10;\n"
              "            } else {\n"
-             "              window.location = '?Z%cR';\n"
+             "              window.location = '?ZX%c';\n"
              "            }\n"
              "            break;\n"
              "          case 48:\n" //close parenthesis
@@ -3191,10 +3210,7 @@ http_play (char *path, char *query)
              current_game->sequence,
              (current_game->fics ? 0 : 5000), //delay
              flip, //left arrow
-             ((flip == 'F') ? "document.getElementById('flip').click();"
-                  : "/* do nothing */"), //down arrow
-             ((flip == 'F') ? "/* do nothing */"
-                  : "document.getElementById('flip').click();"), //up arrow
+             flip, get_lasthalfmove (current_game), //up arrow
              flip, //right arrow
              flip,
              current_game->name, prom, 'X', flip, 'X', '0', '0',
@@ -3403,11 +3419,7 @@ http_play (char *path, char *query)
     if (can_move) {
         promotion_links (flip);
     }
-    if (current_game->transcriptlen) {
-        fprintf (http_out,
-                 "<a href=\"%s?T\" target=\"_blank\">scribe</a>\n",
-                 current_game->name);
-    }
+    fprintf (http_out, "<a href=\"?T%c0\">replay</a>\n", flip);
     fprintf (http_out, "<a href=\"?C%c\">type</a>\n", flip);
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'W')) {
@@ -3589,7 +3601,7 @@ http_games (char *query)
              "            document.getElementById(y).click();\n"
              "            break;\n"
              "          case 37:\n" //left arrow
-             "            window.location = '?L%s';\n"
+             "            window.location = '?z%s';\n"
              "            break;\n"
              "          case 38:\n" //up arrow
              "            document.getElementById(y).style.backgroundColor = 'initial';\n"
@@ -3604,7 +3616,7 @@ http_games (char *query)
              "            break;\n"
              "          case 39:\n" //right arrow
              "            evt.preventDefault();\n"
-             "            window.location = '?R%s';\n"
+             "            window.location = '?Z%s';\n"
              "            return;\n"
              "          case 40:\n" //down arrow
              "            document.getElementById(y).style.backgroundColor = 'initial';\n"
@@ -3931,7 +3943,7 @@ http_players (char *player_path, char *query)
              "tab: swap colors');\n"
              "            break;\n"
              "          case 37:\n" //left arrow
-             "            window.location = '?L%s';\n"
+             "            window.location = '?z%s';\n"
              "            return;\n"
              "          case 9:\n" //tab
              "            window.location = '/players/%s?%c%d%s';\n"
@@ -3947,7 +3959,7 @@ http_players (char *player_path, char *query)
              "            return;\n"
              "          case 39:\n" //right arrow
              "            evt.preventDefault();\n"
-             "            window.location = '?R%s';\n"
+             "            window.location = '?Z%s';\n"
              "            return;\n"
              "          case 40:\n" //down arrow
              "            if (document.getElementById(y+1)) {\n"
@@ -4356,6 +4368,291 @@ http_prefs (char *query)
     return (0);
 }
 
+static void
+http_transcribe (void)
+{
+    char path[MAX_PATH];
+    FILE *in;
+    char prev_pos[66];
+    char pos[66];
+    int movenum = 0;
+    char *notation;
+    int n;
+    int rc = 0;
+
+    pos[65] = '\0';
+
+    sprintf (path, ".chessd/%s.pos", current_game->name);
+
+    in = fopen (path, "r");
+    if (!in) {
+        fprintf (http_out, "%s\n", pos2fen (current_game->start_pos, 0));
+        return;
+    }
+
+    n = fscanf (in, "%65c\n", pos);
+    if (n != 1) {
+        return;
+    }
+
+    fprintf (http_out, "%s\n", pos2fen (pos, movenum));
+
+    while (!feof (in)) {
+        memcpy (prev_pos, pos, 66);
+        n = fscanf (in, "%65c\n", pos);
+        if (n != 1) {
+            break;
+        }
+
+        notation = one_move_diff (prev_pos, pos);
+        if (!notation) {
+            rc = -1;
+            break;
+        }
+
+        if (pos[0] == 'W') {
+            if (!movenum) {
+                fprintf (http_out, "%d. ...", ++movenum);
+            }
+            fprintf (http_out, " %s\n", notation);
+        } else {
+            fprintf (http_out, "%d. %s", ++movenum, notation);
+        }
+    }
+
+    fclose (in);
+}
+
+static int
+http_history (char *path, char *query)
+{
+    char pospath[MAX_PATH];
+    FILE *in;
+    char prev_pos[66];
+    char *notation;
+    int n, y;
+    int rc = 0;
+    char flip = 'X';
+    int halfmove = 0;
+    struct game hg;
+    int lasthalfmove;
+
+    lasthalfmove = get_lasthalfmove (current_game);
+
+    if (query[0]) {
+        if (query[1] == 'F' || query[1] == 'N' || query[1] == 'X') {
+            flip = query[1];
+            halfmove = atoi (query + 2);
+        } else {
+            halfmove = 0;
+        }
+
+        if ((halfmove < 0) || (halfmove > lasthalfmove)) {
+            return (http_play (path, query));
+        }
+    }
+
+    fprintf (http_out,
+             "<html>\n"
+             "  <head>\n"
+             "    <meta name=\"robots\" content=\"noindex\">\n"
+             "    <title>history %s</title>\n"
+             "    <script>\n"
+             "      document.onkeydown = function(evt) {\n"
+             "        evt = evt || window.event;\n"
+             "        switch(evt.which) {\n"
+             "          case 13:\n" //enter
+             "            window.location = '?X%c';\n"
+             "            break;\n"
+             "          case 27:\n" //escape
+             "            window.alert('"
+             "left arrow: make smaller\\n"
+             "right arrow: make bigger\\n"
+             "up arrow:show previous move\\n"
+             "down arrow:show next move\\n"
+             "enter:return to game in progress');\n"
+             "            break;\n"
+             "          case 37:\n" //left arrow
+             "            evt.preventDefault();\n"
+             "            window.location = '?z%s';\n"
+             "            break;\n"
+             "          case 39:\n" //right arrow
+             "            evt.preventDefault();\n"
+             "            window.location = '?Z%s';\n"
+             "            return;\n"
+             "          case 38:\n" //up arrow
+             "            window.location = '?T%c%d';\n"
+             "            break;\n"
+             "          case 40:\n" //down arrow
+             "            window.location = '?T%c%d';\n"
+             "            break;\n"
+             "          default:\n"
+             "            break;\n"
+             "        }\n"
+             "      };\n"
+             "    </script>\n"
+             "  </head>\n"
+             "  <body %s>\n"
+             "    <table>\n"
+             "      <tr>\n"
+             "        <td valign=\"top\" width=\"100px\" style=\"font-size:xx-small\">\n"
+             "          <a href=\"?T\" target=\"_blank\">transcript</a>\n",
+             current_game->name,
+             flip, //enter
+             query, //left arrow
+             query, //right arrow
+             flip, (halfmove > 0 ? halfmove - 1 : halfmove), //up arrow
+             flip, halfmove + 1, //down arrow
+             body_style);
+
+    memcpy (&hg, current_game, sizeof (hg));
+    hg.next = NULL;
+    hg.movenum = 0;
+
+    sprintf (pospath, ".chessd/%s.pos", current_game->name);
+
+    in = fopen (pospath, "r");
+    if (!in) {
+        goto history_print_game;
+    }
+
+    n = fscanf (in, "%65c\n", hg.pos);
+    if (n != 1) {
+        fclose (in);
+        goto history_print_game;
+    }
+
+    y = 0;
+    while ((y++ < halfmove) && !feof (in)) {
+        memcpy (prev_pos, hg.pos, 66);
+        n = fscanf (in, "%65c\n", hg.pos);
+        if (n != 1) {
+            break;
+        }
+
+        notation = one_move_diff (prev_pos, hg.pos);
+        if (!notation) {
+            rc = -1;
+            break;
+        }
+
+        if (hg.pos[0] == 'W') {
+            if (!hg.movenum) {
+                fprintf (http_out, "<br/>%d.&nbsp;...",
+                         ++hg.movenum);
+            }
+            fprintf (http_out, "&nbsp;<a href=\"?T%c%d\">%s</a>\n",
+                     flip, y, notation);
+        } else {
+            fprintf (http_out, "<br/>%d.&nbsp;<a href=\"?T%c%d\">%s</a>",
+                     ++hg.movenum, flip, y, notation);
+        }
+    }
+
+    fclose (in);
+
+history_print_game:
+    fprintf (http_out, "<br/>\n");
+
+    if (halfmove < lasthalfmove) {
+        fprintf (http_out, "<a href=\"?T%c%d\">next move</a>\n",
+                 flip, halfmove + 1);
+    }
+
+    fprintf (http_out, "<a href=\"?X%c\">return</a>\n", flip);
+
+    fprintf (http_out,
+             "        </td>\n"
+             "        <td>\n");
+
+    http_game (&hg, -1, flip);
+
+    fprintf (http_out,
+             "        </td>\n"
+             "      </tr>\n"
+             "    </table>\n"
+             "  </body>\n"
+             "</html>\n");
+
+    return (0);
+}
+
+static int
+http_respond_replay (char *path, char *query)
+{
+    int pid;
+
+    if (query[0] == 'L') {
+        zoom (-0.1);
+        ++query;
+    } else if (query[0] == 'R') {
+        zoom (0.1);
+        ++query;
+    }
+
+    /* these requests are read-only, hence we can fork safely */
+    pid = fork ();
+    if (pid > 0) {
+        /* parent */
+        fprintf (log_out, "%s: pid %d: %s GET %s?%s\n",
+                 cnow (), pid, current_ip, path, query);
+        http_out = NULL;
+        return (0);
+    }
+
+    /* child or else failed fork */
+    if (query[1]) {
+        fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
+        http_history (path, query);
+    } else {
+        fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/plain\n\n");
+        http_transcribe ();
+    }
+
+    if (pid < 0) {
+        fprintf (log_out, "%s: FORK FAILED: %s GET %s?%s\n",
+                 cnow (), current_ip, path, query);
+        return (0);
+    }
+
+    fclose (http_out);
+    exit (0);
+}
+
+static int
+http_respond_root (char *path, char *query)
+{
+    int pid;
+    int rc;
+
+    if (query[0] == 'S' && query[1] == '\0') {
+        fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
+        fprintf (http_out, "%d", god_sequence);
+        return (0);
+    }
+
+    /* these requests are read-only, hence we can fork safely */
+    pid = fork ();
+    if (pid > 0) {
+        /* parent */
+        fprintf (log_out, "%s: pid %d: %s GET %s?%s\n",
+                 cnow (), pid, current_ip, path, query);
+        http_out = NULL;
+        return (0);
+    }
+
+    /* child or else failed fork */
+    fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
+    rc = http_games (query);
+    if (pid < 0) {
+        fprintf (log_out, "%s: FORK FAILED: %s GET %s?%s\n",
+                 cnow (), current_ip, path, query);
+        return (rc);
+    }
+    fclose (http_out);
+    exit (0);
+}
+
 static int
 http_respond (char *path, char *query)
 {
@@ -4383,48 +4680,19 @@ http_respond (char *path, char *query)
         name[0] = '\0';
     }
 
+    if (query[0] == 'z') {
+        zoom (-0.1);
+        ++query;
+    } else if (query[0] == 'Z') {
+        zoom (0.1);
+        ++query;
+    }
+
     set_current_game (name);
 
     if (!current_game) {
         if (!name[0]) {
-            /* root path request */
-            int pid;
-
-            if (query[0] == 'S' && query[1] == '\0') {
-                fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
-                fprintf (http_out, "%d", god_sequence);
-                return (0);
-            }
-
-            if (query[0] == 'L') {
-                zoom (-0.1);
-                ++query;
-            } else if (query[0] == 'R') {
-                zoom (0.1);
-                ++query;
-            }
-
-            /* all root path requests are read-only, hence we can fork safely */
-            pid = fork ();
-            if (pid > 0) {
-                /* parent */
-                fprintf (log_out, "%s: pid %d: %s GET %s?%s\n",
-                         cnow (), pid, current_ip, path, query);
-                http_out = NULL;
-                return (0);
-            } else {
-                /* child or else failed fork */
-                int rc;
-                fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
-                rc = http_games (query);
-                if (pid < 0) {
-                    fprintf (log_out, "%s: FORK FAILED: %s GET %s?%s\n",
-                             cnow (), current_ip, path, query);
-                    return (rc);
-                }
-                fclose (http_out);
-                exit (0);
-            }
+            return (http_respond_root (path, query));
         }
         current_game = create_game (name, 0);
         if (!current_game) {
@@ -4438,9 +4706,12 @@ http_respond (char *path, char *query)
              cnow (), current_ip, path, query);
     fflush (log_out);
 
-    fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
+    if (query[0] != 'T') {
+        fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
+        return (http_play (path, query));
+    }
 
-    return (http_play (path, query));
+    return (http_respond_replay (path, query));
 }
 
 static void
@@ -4659,15 +4930,11 @@ process_fics_line (char *input)
     tick ();
 
     if (notation) {
-        if (!current_game->movenum) {
-            current_game->transcriptlen = 0;
-            transcribe_fen ();
-        }
-        transcribe_move (notation);
+        chat_move (notation);
+        save_move (current_game);
     } else {
-        current_game->transcriptlen = 0;
         current_game->movenum = 0;
-        transcribe_fen ();
+        save_move (current_game);
     }
 }
 
