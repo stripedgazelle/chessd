@@ -56,7 +56,7 @@ struct game {
     char start_pos[66];
     char sel[2]; //0->SELX, 1->SELY
     char pos[66];
-    char unused[2];
+    char destsel[2];
     int sequence;
     int saved_sequence;
     time_t update_t;
@@ -380,7 +380,7 @@ save_game (struct game *g)
     }
 
     if (fprintf (out, "%c%c%.65s%d\n",
-                 g->unused[0], g->unused[1], g->start_pos, g->movenum) < 0
+                 g->destsel[0], g->destsel[1], g->start_pos, g->movenum) < 0
      || fprintf (out, "%c%c%.65s%d\n",
                  g->sel[0], g->sel[1], g->pos, g->sequence) < 0
      || fwrite ("\0", 1, 1, out) < 1
@@ -472,8 +472,6 @@ save_move (struct game *g)
     FILE *out;
     int rc = 0;
 
-    fprintf (log_out, "%s: save_move %s movenum %d\n", cnow (), g->name, g->movenum);
-
     sprintf (path, ".chessd/%s.pos", g->name);
 
     out = fopen (path, (g->movenum ? "a" : "w"));
@@ -488,7 +486,6 @@ save_move (struct game *g)
             goto save_move_close;
         }
         if (!memcmp (g->start_pos, g->pos, 66)) {
-            fprintf (log_out, "%s: save_move at start\n", cnow ());
             goto save_move_close;
         }
     }
@@ -587,7 +584,7 @@ load_game (char *name)
 
     /* scan start position */
     c = fscanf (in, "%c%c%65c%d\n",
-                &g->unused[0], &g->unused[1], g->start_pos, &g->movenum);
+                &g->destsel[0], &g->destsel[1], g->start_pos, &g->movenum);
     if (c != 4) {
         free (g);
         g = NULL;
@@ -654,8 +651,8 @@ alloc_game (char *name)
     strncpy (g->name, name, MAX_NAME);
     g->sel[0] = '0';
     g->sel[1] = '0';
-    g->unused[0] = 'X';
-    g->unused[1] = 'X';
+    g->destsel[0] = 'X';
+    g->destsel[1] = 'X';
     memcpy (g->start_pos, classical_pos (), 66);
     memcpy (g->pos, g->start_pos, 66);
 
@@ -1694,6 +1691,11 @@ notate (char fromx, char fromy, char tox, char toy, char *pos)
     return (coords);
 }
 
+static char fromx = '\0';
+static char fromy = '\0';
+static char tox = '\0';
+static char toy = '\0';
+
 char *
 one_move_diff (char *start_pos, char *end_pos)
 {
@@ -1701,14 +1703,15 @@ one_move_diff (char *start_pos, char *end_pos)
     int diff = 0;
     char x;
     char y;
-    char fromx = '\0';
-    char fromy = '\0';
-    char tox = '\0';
-    char toy = '\0';
     char ofromx = '\0';
     char ofromy = '\0';
     char otox = '\0';
     char otoy = '\0';
+
+    fromx = '\0';
+    fromy = '\0';
+    tox = '\0';
+    toy = '\0';
 
     if (start_pos[0] == end_pos[0]) {
         return (NULL);
@@ -2104,7 +2107,7 @@ pos2fen (char *pos, int movenum)
 
     *(p++) = ' ';
 
-    sprintf (p, "%d\" ]\n", movenum + 1);
+    sprintf (p, "%d\" ]\n", (movenum ? movenum : 1));
 
     return (fen);
 }
@@ -2453,6 +2456,8 @@ http_game (struct game *g, int id, char flip)
 
             if ((g->sel[0] == x) && (g->sel[1] == y)) {
                 bg = "yellow";
+            } else if ((g->destsel[0] == x) && (g->destsel[1] == y)) {
+                bg = (toggle ? "darkolivegreen" : "darkkhaki");
             } else {
                 bg = (toggle ? "teal" : "silver");
             }
@@ -2897,7 +2902,13 @@ http_play (char *path, char *query)
         chat (query + 1);
         fprintf (http_out, "%d", current_game->sequence);
         return (0);
-    } else if (strlen (query) < 6) {
+    }
+
+    fprintf (log_out, "%s: %s GET %s?%s\n",
+             cnow (), current_ip, path, query);
+    fflush (log_out);
+
+    if (strlen (query) < 6) {
         query = default_query;
     } else if (can_move && (strlen (query) == 71)) {
         /********** MODE queries ***********/
@@ -3809,6 +3820,8 @@ purge_old_games (void)
 
             sprintf (path, ".chessd/%s", temp->name);
             unlink (path);
+            sprintf (path, ".chessd/%s.pos", temp->name);
+            unlink (path);
 
             this_game = this_game->next;
             if (previous_game) {
@@ -4424,7 +4437,7 @@ http_transcribe (void)
 }
 
 static int
-http_history (char *path, char *query)
+http_replay (char *path, char *query)
 {
     char pospath[MAX_PATH];
     FILE *in;
@@ -4565,6 +4578,10 @@ history_print_game:
              "        </td>\n"
              "        <td>\n");
 
+    hg.sel[0] = fromx;
+    hg.sel[1] = fromy;
+    hg.destsel[0] = tox;
+    hg.destsel[1] = toy;
     http_game (&hg, -1, flip);
 
     fprintf (http_out,
@@ -4603,7 +4620,7 @@ http_respond_replay (char *path, char *query)
     /* child or else failed fork */
     if (query[1]) {
         fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
-        http_history (path, query);
+        http_replay (path, query);
     } else {
         fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/plain\n\n");
         http_transcribe ();
@@ -4701,10 +4718,6 @@ http_respond (char *path, char *query)
             return (1);
         }
     }
-
-    fprintf (log_out, "%s: %s GET %s?%s\n",
-             cnow (), current_ip, path, query);
-    fflush (log_out);
 
     if (query[0] != 'T') {
         fprintf (http_out, "HTTP/1.0 200 OK\nContent-Type: text/html\n\n");
