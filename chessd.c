@@ -299,11 +299,11 @@ chess2880 (void)
 static void
 tick_game (struct game *g)
 {
+    g->update_t = time (NULL);
     g->sequence++;
     if (g->white != g->black) {
         god_sequence++;
     }
-    g->update_t = time (NULL);
 }
 
 static void
@@ -3430,7 +3430,7 @@ http_play (char *path, char *query)
     if (can_move) {
         promotion_links (flip);
     }
-    fprintf (http_out, "<a href=\"?T%c0\">replay</a>\n", flip);
+    fprintf (http_out, "<a href=\"?T%c1\">replay</a>\n", flip);
     fprintf (http_out, "<a href=\"?C%c\">type</a>\n", flip);
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'W')) {
@@ -3554,14 +3554,19 @@ http_games (char *query)
         break;
     case 'N': //Filter and only expand when updated after now
         threshold_t = now;
+        /* fall through */
     case 'F': //Filter
         omm = 'F';
+        /* fall through */
     case 'T': //Filter and only expand when my move
         filter = query + 1;
-        while (isdigit (*filter)) {
-            threshold_t *= 10;
-            threshold_t += (*filter - '0');
-            ++filter;
+        if (isdigit (*filter)) {
+            threshold_t = 0;
+            while (isdigit (*filter)) {
+                threshold_t *= 10;
+                threshold_t += (*filter - '0');
+                ++filter;
+            }
         }
         if (filter[0]) {
             sanitize_name (filter, filter, 0);
@@ -4457,7 +4462,7 @@ http_replay (char *path, char *query)
             flip = query[1];
             halfmove = atoi (query + 2);
         } else {
-            halfmove = 0;
+            halfmove = 1;
         }
 
         if ((halfmove < 0) || (halfmove > lasthalfmove)) {
@@ -4469,7 +4474,7 @@ http_replay (char *path, char *query)
              "<html>\n"
              "  <head>\n"
              "    <meta name=\"robots\" content=\"noindex\">\n"
-             "    <title>history %s</title>\n"
+             "    <title>replay %s</title>\n"
              "    <script>\n"
              "      document.onkeydown = function(evt) {\n"
              "        evt = evt || window.event;\n"
@@ -4514,29 +4519,36 @@ http_replay (char *path, char *query)
              flip, //enter
              query, //left arrow
              query, //right arrow
-             flip, (halfmove > 0 ? halfmove - 1 : halfmove), //up arrow
+             flip, (halfmove > 1 ? halfmove - 1 : halfmove), //up arrow
              flip, halfmove + 1, //down arrow
              body_style);
 
     memcpy (&hg, current_game, sizeof (hg));
     hg.next = NULL;
     hg.movenum = 0;
+    fromx = '\0';
+    fromy = '\0';
+    tox = '\0';
+    toy = '\0';
 
     sprintf (pospath, ".chessd/%s.pos", current_game->name);
 
     in = fopen (pospath, "r");
     if (!in) {
-        goto history_print_game;
+        goto replay_print_game;
     }
 
+    memcpy (prev_pos, hg.start_pos, 66);
     n = fscanf (in, "%65c\n", hg.pos);
     if (n != 1) {
         fclose (in);
-        goto history_print_game;
+        goto replay_print_game;
     }
 
-    y = 0;
-    while ((y++ < halfmove) && !feof (in)) {
+    /* ordinarily prev_pos, hg.start_pos, and hg.pos should here all be equal */
+
+    y = 1;
+    while ((y++ <= halfmove) && !feof (in)) {
         memcpy (prev_pos, hg.pos, 66);
         n = fscanf (in, "%65c\n", hg.pos);
         if (n != 1) {
@@ -4564,15 +4576,8 @@ http_replay (char *path, char *query)
 
     fclose (in);
 
-history_print_game:
-    fprintf (http_out, "<br/>\n");
-
-    if (halfmove < lasthalfmove) {
-        fprintf (http_out, "<a href=\"?T%c%d\">next move</a>\n",
-                 flip, halfmove + 1);
-    }
-
-    fprintf (http_out, "<a href=\"?X%c\">return</a>\n", flip);
+replay_print_game:
+    fprintf (http_out, "<br/><a href=\"?X%c\">return</a>\n", flip);
 
     fprintf (http_out,
              "        </td>\n"
@@ -4582,6 +4587,7 @@ history_print_game:
     hg.sel[1] = fromy;
     hg.destsel[0] = tox;
     hg.destsel[1] = toy;
+    memcpy (hg.pos, prev_pos, 66);
     http_game (&hg, -1, flip);
 
     fprintf (http_out,
@@ -4854,7 +4860,6 @@ http_client (int http_fd)
     } else if (http_respond (path, query)) {
         return (1);
     } else if (http_out) {
-        fflush (http_out);
         fclose (http_out);
         http_out = NULL;
     }
