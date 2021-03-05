@@ -2829,6 +2829,7 @@ http_play (char *path, char *query)
     int show = 1;
     char *vs;
     char *default_query = "QXXP00";
+    int lasthalfmove;
 
     single_player = (current_game->white == current_game->black);
     can_move = good_password (cookie);
@@ -3044,6 +3045,8 @@ http_play (char *path, char *query)
                  current_game->name, flip);
     }
 
+    lasthalfmove = get_lasthalfmove (current_game);
+
     /********** javascript ***********/
     fprintf (http_out,
              "    <meta name=\"robots\" content=\"noindex\">\n"
@@ -3221,7 +3224,7 @@ http_play (char *path, char *query)
              current_game->sequence,
              (current_game->fics ? 0 : 5000), //delay
              flip, //left arrow
-             flip, get_lasthalfmove (current_game), //up arrow
+             flip, lasthalfmove, //up arrow
              flip, //right arrow
              flip,
              current_game->name, prom, 'X', flip, 'X', '0', '0',
@@ -3430,7 +3433,8 @@ http_play (char *path, char *query)
     if (can_move) {
         promotion_links (flip);
     }
-    fprintf (http_out, "<a href=\"?T%c1\">replay</a>\n", flip);
+    fprintf (http_out, "<a href=\"?T%c%d\">replay</a>\n",
+             flip, lasthalfmove);
     fprintf (http_out, "<a href=\"?C%c\">type</a>\n", flip);
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'W')) {
