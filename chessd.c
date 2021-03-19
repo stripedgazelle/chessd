@@ -1755,6 +1755,13 @@ one_move_diff (char *start_pos, char *end_pos)
                         otox = x;
                         otoy = y;
                     }
+                case 'Q':
+                case 'q':
+                case 'N':
+                case 'n':
+                case 'B':
+                case 'b':
+                    prom = toupper (end_pos[i]);
                 default:
                     if (tox) {
                         break;
@@ -4517,8 +4524,9 @@ http_replay (char *path, char *query)
              "  <body %s>\n"
              "    <table>\n"
              "      <tr>\n"
-             "        <td valign=\"top\" width=\"100px\" style=\"font-size:xx-small\">\n"
-             "          <a href=\"?T\" target=\"_blank\">transcript</a>\n",
+             "        <td valign=\"top\" width=\"110px\">\n"
+             "          <div style=\"font-size:xx-small; overflow-y:auto; height:360px\">\n"
+             "            <a href=\"?T\" target=\"_blank\">transcript</a>\n",
              current_game->name,
              flip, //enter
              query, //left arrow
@@ -4581,7 +4589,9 @@ http_replay (char *path, char *query)
     fclose (in);
 
 replay_print_game:
-    fprintf (http_out, "<br/><a href=\"?X%c\">return</a>\n", flip);
+    fprintf (http_out,
+             "<br/></div>"
+             "<a style=\"font-size:xx-small\" href=\"?X%c\">return</a>\n", flip);
 
     fprintf (http_out,
              "        </td>\n"
