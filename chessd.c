@@ -2816,6 +2816,62 @@ get_lasthalfmove (struct game *g)
     }
 }
 
+static int
+undo (void)
+{
+    char pospath[MAX_PATH];
+    FILE *in;
+    char prev_pos[66];
+    int n, len;
+    struct game hg;
+
+    memcpy (&hg, current_game, sizeof (hg));
+    hg.next = NULL;
+    hg.movenum = 0;
+
+    sprintf (pospath, ".chessd/%s.pos", current_game->name);
+
+    in = fopen (pospath, "r");
+    if (!in) {
+        return (-1);
+    }
+
+    memcpy (prev_pos, hg.start_pos, 66);
+    n = fscanf (in, "%65c\n", hg.pos);
+    if (n != 1) {
+        fclose (in);
+        return (-1);
+    }
+
+    /* ordinarily prev_pos, hg.start_pos, and hg.pos should here all be equal */
+
+    len = 0;
+    while (!feof (in)) {
+        memcpy (prev_pos, hg.pos, 66);
+        n = fscanf (in, "%65c\n", hg.pos);
+        if (n != 1) {
+            break;
+        }
+        len += 66;
+    }
+
+    fclose (in);
+
+    if (len && !truncate (pospath, len)) {
+        current_game->sel[0] = '0';
+        current_game->sel[1] = '0';
+        memcpy (current_game->pos, prev_pos, 66);
+        if (current_game->pos[0] == 'W') {
+            current_game->movenum--;
+        }
+        chatstr ("\nundo move == ");
+        tick ();
+        return (0);
+    }
+
+    return (-1);
+}
+
 #define PROMOTE 0
 #define NETW 1
 #define FLIP 2
@@ -2974,6 +3030,10 @@ http_play (char *path, char *query)
             save_move (current_game);
             tick ();
             can_move = good_password (cookie); /* opposite color now to play */
+        } else if ((query[MODE] == 'U')
+         && !strcmp (current_game->pos, query + 6)) {
+            undo ();
+            can_move = good_password (cookie); /* opposite color now to play */
         }
     }
 
@@ -3003,6 +3063,7 @@ http_play (char *path, char *query)
             if (single_player && (can_move == 1)) {
                 current_game->white->password[0] = '\0';
             }
+            break;
         }
     }
 
@@ -3274,6 +3335,8 @@ http_play (char *path, char *query)
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'B')) {
         print_playing_link (can_move, prom, flip);
+    } else if (can_move) {
+        play_anchor (prom, 'X', flip, 'U', '0', '0', current_game->pos, "undo");
     }
 
     if (single_player) {
@@ -3446,6 +3509,8 @@ http_play (char *path, char *query)
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'W')) {
         print_playing_link (can_move, prom, flip);
+    } else if (can_move) {
+        play_anchor (prom, 'X', flip, 'U', '0', '0', current_game->pos, "undo");
     }
 
     /************** that's all folks! ***************/
