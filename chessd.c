@@ -3335,7 +3335,7 @@ http_play (char *path, char *query)
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'B')) {
         print_playing_link (can_move, prom, flip);
-    } else if (can_move) {
+    } else if (can_move && !current_game->fics) {
         play_anchor (prom, 'X', flip, 'U', '0', '0', current_game->pos, "undo");
     }
 
@@ -3509,7 +3509,7 @@ http_play (char *path, char *query)
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'W')) {
         print_playing_link (can_move, prom, flip);
-    } else if (can_move) {
+    } else if (can_move && !current_game->fics) {
         play_anchor (prom, 'X', flip, 'U', '0', '0', current_game->pos, "undo");
     }
 
@@ -4957,6 +4957,18 @@ process_fics_line (char *input)
     int wcq;
     int bck;
     int bcq;
+    int irr; //number of moves since last irreversible move
+    int gn; //game number
+    char wn[100]; //white player name
+    char bn[100]; //black player name
+    int rel; //-3, -2, 2, -1 opponent to move, 1 my move, 0
+    int it; //initial time in seconds
+    int inc; //increment in seconds
+    int wms; //white material strength
+    int bms; //black material strength
+    int wrt; //white remaining time
+    int brt; //black remaining time
+    char timestr[30];
     char *notation;
 //<12> r---k--r p-pbnpp- -pnp--q- -------- B--PP--p --P-BN-P P----PP- -R-QR--K B -1 0 0 1 1 2 94 Tupangligaw sailingsoul 0 15 10 35 35 552 121 15 K/g1-h1 (2:19) Kh1 0 1 0
     if (strncmp (input, "<12> ", 5)) {
@@ -4984,9 +4996,12 @@ process_fics_line (char *input)
     }
 
     pos[i] = '\0';
-    if (6 != sscanf (input, " %c %d %d %d %d %d ",
-                     &(pos[0]), &efile, &wck, &wcq, &bck, &bcq)) {
-        chatstr ("===== ERROR: could not parse castle rights!\n");
+    if (17 != sscanf (input,
+                      " %c %d %d %d %d %d %d %d"
+                      " %100s %100s %d %d %d %d %d %d %d ",
+                      &(pos[0]), &efile, &wck, &wcq, &bck, &bcq, &irr, &gn,
+                      wn, bn, &rel, &it, &inc, &wms, &bms, &wrt, &brt)) {
+        chatstr ("===== ERROR: could not parse castle rights and remaining time!\n");
         return;
     }
 
@@ -5033,6 +5048,10 @@ process_fics_line (char *input)
         current_game->movenum = 0;
         save_move (current_game);
     }
+    sprintf (timestr,
+             "%02d:%02d %02d:%02d ",
+             wrt / 60, wrt % 60, brt / 60, brt % 60);
+    chatstr (timestr);
 }
 
 static void
