@@ -67,6 +67,7 @@ struct game {
     int seen;
     int fics;
     int fics_style;
+    int fics_color; //1->white, -1->black
     struct player *white;
     struct player *black;
     struct game *next;
@@ -1946,6 +1947,7 @@ print_white_name (struct game *g, int link)
 {
     char *vs;
     char *fmt;
+    char *name = g->white->name;
 
     if (g->pos[0] == 'W') {
         fmt = "<span style=\"background-color:%s; color:%s\">%s</span>";
@@ -1954,11 +1956,13 @@ print_white_name (struct game *g, int link)
     }
 
     if (link) {
-        fprintf (http_out, "<a href=\"/%s\">", g->white->name);
+        fprintf (http_out, "<a href=\"/%s\">", name);
+    } else if (g->fics && (g->fics_color > 0)) {
+        name = "FICS";
     }
 
     fprintf (http_out, fmt,
-             get_color (), get_background_color (), g->white->name);
+             get_color (), get_background_color (), name);
 
     if (link) {
         fprintf (http_out, "</a>&nbsp;");
@@ -1972,6 +1976,7 @@ print_black_name (struct game *g, int link)
 {
     char *vs;
     char *fmt;
+    char *name = g->black->name;
 
     if (g->pos[0] == 'B') {
         fmt = "<span style=\"background-color:%s; color:%s\">%s</span>";
@@ -1980,11 +1985,13 @@ print_black_name (struct game *g, int link)
     }
 
     if (link) {
-        fprintf (http_out, "<a href=\"/%s\">", g->black->name);
+        fprintf (http_out, "<a href=\"/%s\">", name);
+    } else if (g->fics && (g->fics_color < 0)) {
+        name = "FICS";
     }
 
     fprintf (http_out, fmt,
-             get_color (), get_background_color (), g->black->name);
+             get_color (), get_background_color (), name);
 
     if (link) {
         fprintf (http_out, "</a>&nbsp;");
@@ -5043,15 +5050,32 @@ process_fics_line (char *input)
 
     if (notation) {
         chat_move (notation);
-        save_move (current_game);
     } else {
+        chatstr (wn);
+        chatstr (" vs ");
+        chatstr (bn);
+        chatstr (" == ");
         current_game->movenum = 0;
-        save_move (current_game);
     }
+
+    switch (rel) {
+    default:
+        current_game->fics_color = 0;
+        break;
+    case 1: //my move
+        current_game->fics_color = (pos[0] == 'W' ? -1 : 1);
+        break;
+    case -1: //opponents move
+        current_game->fics_color = (pos[0] == 'W' ? 1 : -1);
+        break;
+    }
+
     sprintf (timestr,
              "%02d:%02d %02d:%02d ",
              wrt / 60, wrt % 60, brt / 60, brt % 60);
     chatstr (timestr);
+
+    save_move (current_game);
 }
 
 static void
