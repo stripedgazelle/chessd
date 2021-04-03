@@ -1583,7 +1583,9 @@ ambiguous (char piece, char tox, char toy, char *pos)
     y = '8';
     x = 'a';
     for (i = 1; i <= 64; ++i) {
-        if ((pos[i] == piece)
+        if ((pos[i] == piece
+             || (x == 'b' && ((piece == 'B' && pos[i] == 'P')
+                               || (piece == 'b' && pos[i] == 'p'))))
          && legit_move (x, y, tox, toy, pos)) {
             if (++count > 1) {
                 return (1);
@@ -2572,6 +2574,7 @@ fics_connect (void)
 
     current_game->fics = sockfd;
     current_game->fics_style = 0;
+    current_game->fics_color = 0;
     return (sockfd);
 }
 
