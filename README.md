@@ -14,7 +14,7 @@ Generally on any page ESCAPE should show a popup describing key bindings.
 Move each piece by clicking on it and then clicking on the destination square (not by dragging).
 Clicking 'restart' returns the game to the starting position; clicking 'blank' clears the chat.
 
-Clicking 'fics' connects to the Free Internet Chess Server, but be aware that this feature is a work in progress -- currently the FICS player names are not yet transferred to the board and remaining time is only appended to the chat at the beginning of your move.
+Clicking 'fics' connects to the Free Internet Chess Server, but be aware that this feature is a work in progress -- currently the remaining time is only appended to the chat at the beginning of your move.
 
 Each game xxx_vs_yyy is persisted as a file ./.chessd/xxx_vs_yyy with positions for every move persisted in ./.chessd/xxx_vs_yyy.pos.
 Games with the same player xxx as both white and black are named xxx rather than xxx_vs_xxx.
