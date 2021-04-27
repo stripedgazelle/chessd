@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <limits.h>
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
@@ -31,6 +32,7 @@
 #define cti(XX,YY) ((('8' - (YY)) * 8) + ((XX) - 'a') + 1)
 #define VS "_vs_"
 #define VSLEN 4
+#define NO_ID INT_MAX
 
 static int legit_move (char fromx, char fromy, char tox, char toy, char *pos);
 
@@ -2445,12 +2447,12 @@ http_game (struct game *g, int id, char flip)
     char y, x;
 
     if (flip == 'F') {
-        print_white_name (g, (id >= 0));
+        print_white_name (g, (id != NO_ID));
     } else {
-        print_black_name (g, (id >= 0));
+        print_black_name (g, (id != NO_ID));
     }
 
-    if (id >= 0) {
+    if (id != NO_ID) {
         fprintf (http_out, "<a id=\"%d\" name=\"%d\" href=\"%s\">",
                  id, id, g->name);
     }
@@ -2497,14 +2499,14 @@ http_game (struct game *g, int id, char flip)
              g->chatlen, g->chat);
     fprintf (http_out, "</td></tr></table>\n");
 
-    if (id >= 0) {
+    if (id != NO_ID) {
         fprintf (http_out, "</a>\n");
     }
 
     if (flip == 'F') {
-        print_black_name (g, (id >= 0));
+        print_black_name (g, (id != NO_ID));
     } else {
-        print_white_name (g, (id >= 0));
+        print_white_name (g, (id != NO_ID));
     }
 }
 
@@ -2705,7 +2707,7 @@ http_chat (int flip)
              "  <body %s>\n",
              current_game->name, body_style);
 
-    http_game (current_game, -1, flip);
+    http_game (current_game, NO_ID, flip);
 
     fprintf (http_out,
              "    <form id=\"form\" method=\"GET\">\n"
@@ -2731,7 +2733,7 @@ http_password (char flip, int protected)
              current_game->name, body_style);
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'W')) {
-        http_game (current_game, -1, flip);
+        http_game (current_game, NO_ID, flip);
     }
 
     fprintf (http_out,
@@ -2747,7 +2749,7 @@ http_password (char flip, int protected)
                                           : current_game->black->name));
 
     if ((flip == 'F') ^ (current_game->pos[0] == 'B')) {
-        http_game (current_game, -1, flip);
+        http_game (current_game, NO_ID, flip);
     }
 
     fprintf (http_out,
@@ -4677,7 +4679,7 @@ replay_print_game:
     hg.destsel[0] = tox;
     hg.destsel[1] = toy;
     memcpy (hg.pos, prev_pos, 66);
-    http_game (&hg, -1, flip);
+    http_game (&hg, NO_ID, flip);
 
     fprintf (http_out,
              "        </td>\n"
