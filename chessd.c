@@ -1063,14 +1063,17 @@ attacked (char tox, char toy, char *pos)
 static int
 legit_king_move (char fromx, char fromy, char tox, char toy, char *pos)
 {
+    char kc = color (pos[cti(fromx,fromy)]);
+
     if (abs (fromy - toy) > 1) {
         return (0);
     } else if (abs (fromy - toy) == 1
-            || (fromy > '1' && fromy < '8')
-            || attacked (fromx, fromy, pos)
-            || ((tox != 'g') && (tox != 'c'))) {
+            || (fromy != '1' && kc == 'W')
+            || (fromy != '8' && kc == 'B')
+            || ((tox != 'g') && (tox != 'c'))
+            || attacked (fromx, fromy, pos)) {
         return (abs (fromx - tox) <= 1
-             && color (pos[cti(tox,toy)]) != color (pos[cti(fromx,fromy)]));
+             && color (pos[cti(tox,toy)]) != kc);
     } else {
         char src;
         char dest;
