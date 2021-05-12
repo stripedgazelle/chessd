@@ -8,7 +8,7 @@ Clicking on 'players' takes you to a filtered list of players with links to crea
 On each game with the same player name as both white and black, that named player may be protected via a password by clicking 'claim'.
 To remove that association, click 'disown'.
 Clicking on 'preferences' allows you to choose background-color, color, scale, and password (or blank password to logout) for your I.P. address.
-Each game can be started as classical, chess960, or dynamite (like chess960 but with no restriction on king placement and no castling allowed).
+Each game can be started as classical, nk (no castling), chess960, or dynamite (like chess960 but with no restriction on king placement and no castling allowed).
 Typing during a game simply becomes chat.
 Generally on any page ESCAPE should show a popup describing key bindings.
 Move each piece by clicking on it and then clicking on the destination square (not by dragging).
