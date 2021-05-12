@@ -233,6 +233,18 @@ classical_pos (void)
 }
 
 static char *
+nk_pos (void)
+{
+    static char pos[66];
+
+    if (pos[0] != 'W') {
+        memcpy (pos, fischer (2, 1, 2, 1, 2, 1), 66);
+    }
+
+    return (pos);
+}
+
+static char *
 chess960 (void)
 {
     int lb; // light square bishop 0->b, 1->d, 2->f, 3->h
@@ -3331,6 +3343,8 @@ http_play (char *path, char *query)
                          classical_pos (), "classical");
             play_anchor (prom, 'X', flip, 'S', '0', '0',
                          chess960 (), "960");
+            play_anchor (prom, 'X', flip, 'S', '0', '0',
+                         nk_pos (), "nk");
             play_anchor (prom, 'X', flip, 'S', '0', '0',
                          chess2880 (), "dynamite");
         } else {
