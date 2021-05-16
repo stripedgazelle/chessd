@@ -3082,7 +3082,11 @@ http_play (char *path, char *query)
             if (can_move == 2) {
                 return (http_captcha (path, query));
             }
-            if (current_game->chatlen) {
+            if (current_game->fics && (can_move == 1)) {
+                chatstr ("\n==================== DISCONNECTED FROM FICS ====================\n");
+                close (current_game->fics);
+                current_game->fics = 0;
+            } else if (current_game->chatlen) {
                 current_game->chatlen = 0;
             }
             break;
@@ -3335,7 +3339,11 @@ http_play (char *path, char *query)
     /************** top player links ***************/
     print_reversed_link (current_game);
 
-    if (can_move && !current_game->fics) {
+    if (current_game->fics) {
+        play_anchor (prom, 'B', flip, 'X',
+                     current_game->sel[0], current_game->sel[1],
+                     current_game->pos, "disconnect");
+    } else if (can_move) {
         /**** links available only at starting position ****/
         if ((current_game->sel[0] == '0' && current_game->sel[1] == '0')
                 && (!memcmp (current_game->pos, current_game->start_pos, 66))) {
