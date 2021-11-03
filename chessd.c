@@ -1658,12 +1658,11 @@ notate (char fromx, char fromy, char tox, char toy, char *pos)
     piece = pos[cti (fromx, fromy)];
     to_piece = pos[cti (tox, toy)];
     if ((piece == 'P') || (piece == 'p')) {
-        char p[4] = "";
+        char p[3] = "";
         if ((toy == '1') || (toy == '8')) {
-            p[0] = '(';
+            p[0] = '=';
             p[1] = prom;
-            p[2] = ')';
-            p[3] = '\0';
+            p[2] = '\0';
         }
         if (fromx == tox) {
             sprintf (coords, "%c%c%s", tox, toy, p);
